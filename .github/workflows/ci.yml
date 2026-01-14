@@ -1,0 +1,104 @@
+name: CI
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+    types: [opened, reopened, synchronize]
+  schedule:
+    - cron: '0 0 * * *'  # every day at midnight
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check_features:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Run check features
+        run: |
+          cd omnipaxos
+          chmod +x test_all_features.sh
+          ./test_all_features.sh -c
+        shell: bash
+
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        rust: [stable, nightly]
+    steps:
+      - name: Setup rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+          override: true
+      - name: Use the cache to share dependencies # keyed by Cargo.lock
+        uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Checkout sources
+        uses: actions/checkout@v2
+      - name: Run tests
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --verbose --features default,logging,toml_config --no-fail-fast
+      - name: Run UniCache tests
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: -p omnipaxos --verbose --features default,logging,toml_config,unicache --no-fail-fast
+
+  format:
+    name: cargo fmt
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install stable toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: nightly
+          components: rustfmt, clippy
+          override: true
+      - name: Use the cache to share dependencies # keyed by Cargo.lock
+        uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Checkout sources
+        uses: actions/checkout@v2
+      - name: Run cargo fmt
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --all -- --check
+
+  clippy_check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run Clippy
+        run: cargo clippy -- -D warnings -W clippy::all
+
+  check_doc_structure:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+      - name: Install dependencies
+        run: npm install js-yaml fs
+      - name: Run Document Structure Check
+        run: node .github/scripts/doc_structure_checker.js

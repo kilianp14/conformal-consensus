@@ -1,0 +1,15 @@
+/docs/book/*
+/target
+/log
+Cargo.lock
+omnipaxos_storage/storage
+/omnipaxos/tests/config/storage/
+
+# IntelliJ
+*.iml
+.idea/*
+*.log
+docs/.DS_Store
+.DS_Store
+*/.idea/*
+

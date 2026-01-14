@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = [
+    "omnipaxos",
+    "omnipaxos_storage",
+    "omnipaxos_macros",
+    "omnipaxos_ui",
+    "examples/kv_store",
+    "examples/dashboard",
+]
+
+[profile.release]
+lto = true
