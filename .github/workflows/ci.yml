@@ -19,7 +19,9 @@ jobs:
   check_features:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
       - name: Run check features
         run: |
           cd omnipaxos
@@ -31,67 +33,43 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      max-parallel: 1
       matrix:
         rust: [stable, nightly]
     steps:
+      - uses: actions/checkout@v4
       - name: Setup rust toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
-          override: true
-      - name: Use the cache to share dependencies # keyed by Cargo.lock
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-      - name: Checkout sources
-        uses: actions/checkout@v6
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
       - name: Run tests
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --verbose --features default,logging,toml_config --no-fail-fast
+        run: cargo test --verbose --features default,logging,toml_config --no-fail-fast
       - name: Run UniCache tests
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: -p omnipaxos --verbose --features default,logging,toml_config,unicache --no-fail-fast
+        run: cargo test -p omnipaxos --verbose --features default,logging,toml_config,unicache --no-fail-fast
 
   format:
     name: cargo fmt
     runs-on: ubuntu-latest
     steps:
-      - name: Install stable toolchain
-        uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v4
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
         with:
-          profile: minimal
-          toolchain: nightly
-          components: rustfmt, clippy
-          override: true
-      - name: Use the cache to share dependencies # keyed by Cargo.lock
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-      - name: Checkout sources
-        uses: actions/checkout@v6
+          components: rustfmt
       - name: Run cargo fmt
-        uses: actions-rs/cargo@v1
-        with:
-          command: fmt
-          args: --all -- --check
+        run: cargo fmt --all -- --check
 
   clippy_check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
       - name: Run Clippy
         run: cargo clippy -- -D warnings -W clippy::all
 
