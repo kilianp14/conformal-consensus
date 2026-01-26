@@ -3,9 +3,11 @@ on:
   push:
     branches:
       - master
+      - main
   pull_request:
     branches:
       - master
+      - main
     types: [opened, reopened, synchronize]
   schedule:
     - cron: '0 0 * * *'  # every day at midnight
@@ -89,7 +91,7 @@ jobs:
   clippy_check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v6
       - name: Run Clippy
         run: cargo clippy -- -D warnings -W clippy::all
 
@@ -97,7 +99,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
       - name: Install dependencies
         run: npm install js-yaml fs
       - name: Run Document Structure Check
