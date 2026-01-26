@@ -152,8 +152,8 @@ fn draw_title<'a>(app: &App) -> Paragraph<'a> {
     )
 }
 
-fn draw_chart(app: &App, window_width: usize) -> BarChart {
-    let data: &Vec<(&str, u64)> = &app
+fn draw_chart<'a>(app: &'a App, window_width: usize) -> BarChart<'a> {
+    let data: Vec<(&str, u64)> = app
         .throughput_data
         .iter()
         .take(window_width / (UI_BARCHART_WIDTH + UI_BARCHART_GAP) as usize)
@@ -186,7 +186,7 @@ fn draw_chart(app: &App, window_width: usize) -> BarChart {
                 .title(title)
                 .borders(Borders::ALL),
         )
-        .data(data)
+        .data(&data)
         .bar_width(UI_BARCHART_WIDTH)
         .bar_gap(UI_BARCHART_GAP)
         .value_style(Style::default().fg(app.leader_color).bg(app.leader_color))
