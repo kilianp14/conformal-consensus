@@ -1,8 +1,5 @@
-use super::super::{
-    ballot_leader_election::Ballot,
-    util::{LeaderState, PromiseMetaData},
-};
-use crate::util::{AcceptedMetaData, WRITE_ERROR_MSG};
+use super::super::ballot_leader_election::Ballot;
+use crate::util::{AcceptedMetaData, LeaderState, PromiseMetaData, WRITE_ERROR_MSG};
 
 use super::*;
 
@@ -40,20 +37,9 @@ where
             self.leader_state.set_promise(my_promise, self.pid, true);
             /* initialise longest chosen sequence and update state */
             self.state = (Role::Leader, Phase::Prepare);
-            let prep = Prepare {
-                n,
-                decided_idx,
-                n_accepted: na,
-                accepted_idx,
-            };
             /* send prepare */
-            for pid in &self.peers {
-                self.outgoing.push(Message::SequencePaxos(PaxosMessage {
-                    from: self.pid,
-                    to: *pid,
-                    msg: PaxosMsg::Prepare(prep),
-                }));
-            }
+            let p = self.create_prepare();
+            self.send_to_all_peers(PaxosMsg::Prepare(p));
         } else {
             self.become_follower();
         }
@@ -144,6 +130,19 @@ where
         self.leader_state.set_accepted_idx(self.pid, accepted_idx);
         for pid in self.leader_state.get_promised_followers() {
             self.send_accept_stopsign(pid, ss.clone(), false);
+        }
+    }
+
+    fn create_prepare(&self) -> Prepare {
+        let n = self.leader_state.n_leader;
+        let decided_idx = self.internal_storage.get_decided_idx();
+        let n_accepted = self.internal_storage.get_accepted_round();
+        let accepted_idx = self.internal_storage.get_accepted_idx();
+        Prepare {
+            n,
+            decided_idx,
+            n_accepted,
+            accepted_idx,
         }
     }
 

@@ -21,8 +21,6 @@ use std::{
     fmt::{Debug, Display},
     ops::RangeBounds,
 };
-#[cfg(feature = "toml_config")]
-use toml;
 
 /// Configuration for `OmniPaxos`.
 /// # Fields
@@ -275,7 +273,7 @@ where
     /// necessarily imply that the leader is not in the accepted phase; it only reflects the current
     /// phase of this node.
     pub fn get_current_leader(&self) -> Option<(NodeId, bool)> {
-        let promised_pid = self.seq_paxos.get_promise().pid;
+        let promised_pid = self.get_promise().pid;
         if promised_pid == 0 {
             None
         } else {
@@ -286,7 +284,7 @@ where
 
     /// Returns the promised ballot of this node.
     pub fn get_promise(&self) -> Ballot {
-        self.seq_paxos.get_promise()
+        self.seq_paxos.internal_storage.get_promise()
     }
 
     /// Moves outgoing messages from this server into the buffer. The messages should then be sent via the network implementation.
@@ -390,7 +388,7 @@ where
     /// leadership with higher Ballots.
     pub fn try_become_leader(&mut self) {
         let mut my_ballot = self.ble.get_current_ballot();
-        let promise = self.seq_paxos.get_promise();
+        let promise = self.get_promise();
         my_ballot.n = promise.n + 1;
         self.seq_paxos.handle_leader(my_ballot);
     }
@@ -408,7 +406,7 @@ where
     fn election_timeout(&mut self) {
         if let Some(new_leader) = self
             .ble
-            .hb_timeout(self.seq_paxos.get_state(), self.seq_paxos.get_promise())
+            .hb_timeout(self.seq_paxos.get_state(), self.get_promise())
         {
             self.seq_paxos.handle_leader(new_leader);
         }
