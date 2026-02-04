@@ -1,7 +1,11 @@
 use super::super::ballot_leader_election::Ballot;
-use crate::util::{AcceptedMetaData, LeaderState, PromiseMetaData, WRITE_ERROR_MSG};
+use crate::util::{AcceptedMetaData, PromiseMetaData, WRITE_ERROR_MSG};
 
 use super::*;
+
+mod state;
+
+pub(crate) use state::LeaderState;
 
 impl<T, B> SequencePaxos<T, B>
 where
@@ -38,8 +42,13 @@ where
             /* initialise longest chosen sequence and update state */
             self.state = (Role::Leader, Phase::Prepare);
             /* send prepare */
-            let p = self.create_prepare();
-            self.send_to_all_peers(PaxosMsg::Prepare(p));
+            let prep = Prepare {
+                n,
+                decided_idx,
+                n_accepted: na,
+                accepted_idx,
+            };
+            self.send_to_all_peers(PaxosMsg::Prepare(prep));
         } else {
             self.become_follower();
         }
@@ -78,20 +87,6 @@ where
             (Role::Leader, Phase::Accept) => self.accept_stopsign_leader(ss),
             _ => self.forward_stopsign(ss),
         }
-    }
-
-    pub(crate) fn send_prepare(&mut self, to: NodeId) {
-        let prep = Prepare {
-            n: self.leader_state.n_leader,
-            decided_idx: self.internal_storage.get_decided_idx(),
-            n_accepted: self.internal_storage.get_accepted_round(),
-            accepted_idx: self.internal_storage.get_accepted_idx(),
-        };
-        self.outgoing.push(Message::SequencePaxos(PaxosMessage {
-            from: self.pid,
-            to,
-            msg: PaxosMsg::Prepare(prep),
-        }));
     }
 
     pub(crate) fn accept_entry_leader(&mut self, entry: T) {
@@ -133,17 +128,14 @@ where
         }
     }
 
-    fn create_prepare(&self) -> Prepare {
-        let n = self.leader_state.n_leader;
-        let decided_idx = self.internal_storage.get_decided_idx();
-        let n_accepted = self.internal_storage.get_accepted_round();
-        let accepted_idx = self.internal_storage.get_accepted_idx();
-        Prepare {
-            n,
-            decided_idx,
-            n_accepted,
-            accepted_idx,
-        }
+    fn send_prepare(&mut self, to: NodeId) {
+        let prep = Prepare {
+            n: self.leader_state.n_leader,
+            decided_idx: self.internal_storage.get_decided_idx(),
+            n_accepted: self.internal_storage.get_accepted_round(),
+            accepted_idx: self.internal_storage.get_accepted_idx(),
+        };
+        self.send_msg_to(to, PaxosMsg::Prepare(prep));
     }
 
     fn send_accsync(&mut self, to: NodeId) {
@@ -181,12 +173,7 @@ where
             #[cfg(feature = "unicache")]
             unicache: self.internal_storage.get_unicache(),
         };
-        let msg = Message::SequencePaxos(PaxosMessage {
-            from: self.pid,
-            to,
-            msg: PaxosMsg::AcceptSync(acc_sync),
-        });
-        self.outgoing.push(msg);
+        self.send_msg_to(to, PaxosMsg::AcceptSync(acc_sync));
     }
 
     fn send_acceptdecide(&mut self, accepted: AcceptedMetaData<T>) {
@@ -209,11 +196,7 @@ where
                         decided_idx,
                         entries: accepted.entries.clone(),
                     };
-                    self.outgoing.push(Message::SequencePaxos(PaxosMessage {
-                        from: self.pid,
-                        to: pid,
-                        msg: PaxosMsg::AcceptDecide(acc),
-                    }));
+                    self.send_msg_to(pid, PaxosMsg::AcceptDecide(acc));
                 }
             }
         }
@@ -224,16 +207,12 @@ where
             true => self.leader_state.get_seq_num(to),
             false => self.leader_state.next_seq_num(to),
         };
-        let acc_ss = PaxosMsg::AcceptStopSign(AcceptStopSign {
+        let acc_ss = AcceptStopSign {
             seq_num,
             n: self.leader_state.n_leader,
             ss,
-        });
-        self.outgoing.push(Message::SequencePaxos(PaxosMessage {
-            from: self.pid,
-            to,
-            msg: acc_ss,
-        }));
+        };
+        self.send_msg_to(to, PaxosMsg::AcceptStopSign(acc_ss));
     }
 
     pub(crate) fn send_decide(&mut self, to: NodeId, decided_idx: usize, resend: bool) {
@@ -246,11 +225,7 @@ where
             seq_num,
             decided_idx,
         };
-        self.outgoing.push(Message::SequencePaxos(PaxosMessage {
-            from: self.pid,
-            to,
-            msg: PaxosMsg::Decide(d),
-        }));
+        self.send_msg_to(to, PaxosMsg::Decide(d));
     }
 
     fn handle_majority_promises(&mut self) {
@@ -346,10 +321,10 @@ where
     fn get_latest_accdec_message(&mut self, to: NodeId) -> Option<&mut AcceptDecide<T>> {
         if let Some((bal, outgoing_idx)) = self.leader_state.get_latest_accept_meta(to) {
             if bal == self.leader_state.n_leader {
-                if let Message::SequencePaxos(PaxosMessage {
+                if let PaxosMessage {
                     msg: PaxosMsg::AcceptDecide(accdec),
                     ..
-                }) = self.outgoing.get_mut(outgoing_idx).unwrap()
+                } = self.outgoing.get_mut(outgoing_idx).unwrap()
                 {
                     return Some(accdec);
                 } else {
@@ -372,6 +347,7 @@ where
             Phase::Prepare => {
                 // Resend Prepare
                 let preparable_peers = self.leader_state.get_preparable_peers(&self.peers);
+
                 for peer in preparable_peers {
                     self.send_prepare(peer);
                 }

@@ -1,4 +1,4 @@
-use super::{ballot_leader_election::Ballot, messages::sequence_paxos::*, util::LeaderState};
+use super::{ballot_leader_election::Ballot, messages::sequence_paxos::*};
 #[cfg(feature = "logging")]
 use crate::utils::logger::create_logger;
 use crate::{
@@ -21,6 +21,7 @@ pub mod leader;
 pub mod messaging;
 pub mod predictor;
 
+use leader::LeaderState;
 use messaging::PeerConnectivity;
 use predictor::{Mode, ModeChanger};
 
