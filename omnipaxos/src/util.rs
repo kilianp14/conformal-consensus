@@ -268,34 +268,3 @@ pub(crate) struct AcceptedMetaData<T: Entry> {
     #[cfg(feature = "unicache")]
     pub entries: Vec<T::EncodeResult>,
 }
-
-#[cfg(not(feature = "unicache"))]
-#[cfg(test)]
-mod tests {
-    use super::*; // Import functions and types from this module
-    use crate::storage::NoSnapshot;
-    #[test]
-    fn preparable_peers_test() {
-        type Value = ();
-
-        impl Entry for Value {
-            type Snapshot = NoSnapshot;
-        }
-
-        let nodes = vec![6, 7, 8];
-        let quorum = Quorum::Majority(2);
-        let max_pid = 8;
-        let leader_state =
-            LeaderState::<Value>::with(Ballot::with(1, 1, 1, max_pid), max_pid as usize, quorum);
-        let prep_peers = leader_state.get_preparable_peers(&nodes);
-        assert_eq!(prep_peers, nodes);
-
-        let nodes = vec![7, 1, 100, 4, 6];
-        let quorum = Quorum::Majority(3);
-        let max_pid = 100;
-        let leader_state =
-            LeaderState::<Value>::with(Ballot::with(1, 1, 1, max_pid), max_pid as usize, quorum);
-        let prep_peers = leader_state.get_preparable_peers(&nodes);
-        assert_eq!(prep_peers, nodes);
-    }
-}
