@@ -1,5 +1,5 @@
 use crate::entry::LogEntry;
-use omnipaxos::{messages::Message, util::NodeId};
+use omnipaxos::{messages::Message, utils::NodeId};
 use std::{collections::HashMap, env, time::Duration};
 use tokio::sync::mpsc;
 

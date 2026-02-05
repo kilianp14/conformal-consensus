@@ -1,14 +1,13 @@
-use super::{ballot_leader_election::Ballot, messages::sequence_paxos::*};
 #[cfg(feature = "logging")]
 use crate::utils::logger::create_logger;
 use crate::{
-    messages::Message,
     storage::{
         internal_storage::{InternalStorage, InternalStorageConfig},
         Entry, Snapshot, StopSign, Storage,
     },
-    util::{
-        FlexibleQuorum, LogSync, NodeId, Quorum, SequenceNumber, READ_ERROR_MSG, WRITE_ERROR_MSG,
+    utils::{
+        defaults::DEFAULT_MODE, Ballot, FlexibleQuorum, LogSync, Mode, NodeId, Phase, Quorum, Role,
+        SequenceNumber, READ_ERROR_MSG, WRITE_ERROR_MSG,
     },
     ClusterConfig, CompactionErr, OmniPaxosConfig, ProposeErr,
 };
@@ -16,30 +15,15 @@ use crate::{
 use slog::{debug, info, trace, warn, Logger};
 use std::{fmt::Debug, vec};
 
-pub mod follower;
-pub mod leader;
-pub mod messaging;
-pub mod predictor;
+mod follower;
+mod leader;
+/// The different messages used by the SequencePaxos layer
+pub mod messages;
+mod messaging;
 
-use leader::LeaderState;
+pub(crate) use leader::LeaderState;
+use messages::*;
 use messaging::PeerConnectivity;
-use predictor::{Mode, ModeChanger};
-
-const DEFAULT_MODE: Mode = Mode::OmniPaxos;
-
-#[derive(PartialEq, Debug)]
-pub(crate) enum Phase {
-    Prepare,
-    Accept,
-    Recover,
-    None,
-}
-
-#[derive(PartialEq, Debug)]
-pub(crate) enum Role {
-    Follower,
-    Leader,
-}
 
 /// Configuration for `SequencePaxos`.
 /// # Fields
@@ -108,7 +92,7 @@ where
     quorum_size: usize,
     super_quorum_size: usize,
     peer_connectivity: PeerConnectivity,
-    mode_changer: ModeChanger,
+    mode: Mode,
     #[cfg(feature = "logging")]
     logger: Logger,
 }
@@ -166,9 +150,7 @@ where
             batch_size: config.batch_size,
         };
         let peer_connectivity = PeerConnectivity::new(*max_peer_pid, quorum);
-        let mode_changer = ModeChanger {
-            current_mode: DEFAULT_MODE,
-        };
+        let mode = DEFAULT_MODE;
         let mut paxos = SequencePaxos {
             internal_storage: InternalStorage::with(
                 storage,
@@ -189,7 +171,7 @@ where
             quorum_size,
             super_quorum_size,
             peer_connectivity,
-            mode_changer,
+            mode,
             #[cfg(feature = "logging")]
             logger: {
                 if let Some(logger) = config.custom_logger {
@@ -320,23 +302,12 @@ where
         }
     }
 
-    /// Moves the outgoing messages from this replica into the buffer. The messages should then be sent via the network implementation.
-    /// If `buffer` is empty, it gets swapped with the internal message buffer. Otherwise, messages are appended to the buffer.
-    /// This prevents messages from getting discarded.
-    pub(crate) fn take_outgoing_msgs(&mut self, buffer: &mut Vec<Message<T>>) {
-        if buffer.is_empty() {
-            let mut transformed_msgs = self
-                .outgoing
-                .drain(..)
-                .map(Message::SequencePaxos)
-                .collect::<Vec<_>>();
-            std::mem::swap(buffer, &mut transformed_msgs);
-        } else {
-            // User has unsent messages in their buffer, must extend their buffer.
-            buffer.extend(self.outgoing.drain(..).map(Message::SequencePaxos));
-        }
+    /// Clears and returns the outgoing messages.
+    pub(crate) fn take_outgoing_messages(&mut self) -> Vec<PaxosMessage<T>> {
+        let msgs = std::mem::take(&mut self.outgoing);
         self.leader_state.reset_latest_accept_meta();
         self.latest_accepted_meta = None;
+        msgs
     }
 
     /// Returns whether this Sequence Paxos has been reconfigured

@@ -3,7 +3,7 @@ use crate::{
     util::{OUTGOING_MESSAGE_PERIOD, TICK_PERIOD, UI_TICK_PERIOD},
     OmniPaxosLog,
 };
-use omnipaxos::{messages::Message, util::NodeId};
+use omnipaxos::{messages::Message, utils::NodeId};
 use omnipaxos_ui::OmniPaxosUI;
 use std::{
     collections::HashMap,

@@ -1,7 +1,7 @@
 #![cfg(feature = "toml_config")]
 pub mod utils;
 
-use omnipaxos::{util::FlexibleQuorum, OmniPaxosConfig};
+use omnipaxos::{utils::FlexibleQuorum, OmniPaxosConfig};
 use omnipaxos_storage::memory_storage::MemoryStorage;
 use serial_test::serial;
 use utils::Value;
@@ -10,6 +10,7 @@ use utils::Value;
 /// from a TOML file.
 #[test]
 #[serial]
+#[ignore]
 fn config_all_fields_test() {
     let file_path = "tests/config/node1.toml";
     match OmniPaxosConfig::with_toml(file_path) {

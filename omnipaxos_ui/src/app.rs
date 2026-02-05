@@ -1,5 +1,5 @@
 use crate::{util::defaults::*, UIAppConfig};
-use omnipaxos::util::NodeId;
+use omnipaxos::utils::NodeId;
 use ratatui::style::Color;
 use std::time::Instant;
 

@@ -1,7 +1,7 @@
 use crate::{kv::KeyValue, server::OmniPaxosServer, util::*};
 use omnipaxos::{
     messages::Message,
-    util::{LogEntry, NodeId},
+    utils::{LogEntry, NodeId},
     *,
 };
 use omnipaxos_storage::memory_storage::MemoryStorage;

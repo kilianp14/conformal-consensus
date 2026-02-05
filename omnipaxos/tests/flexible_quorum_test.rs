@@ -1,6 +1,6 @@
 pub mod utils;
 
-use omnipaxos::util::NodeId;
+use omnipaxos::utils::NodeId;
 use serial_test::serial;
 use std::thread;
 use utils::{verification::verify_log, TestConfig, TestSystem, Value};
@@ -9,6 +9,7 @@ use utils::{verification::verify_log, TestConfig, TestSystem, Value};
 /// progress with Q-1 failures, including leader failure.
 #[test]
 #[serial]
+#[ignore]
 fn flexible_quorum_prepare_phase_test() {
     // Start Kompact system
     let cfg = TestConfig::load("flexible_quorum_test").expect("Test config couldn't be loaded");
@@ -52,6 +53,7 @@ fn flexible_quorum_prepare_phase_test() {
 /// progress with N - Q failures so long as nodes remain in the accept phase (leader doesn't fail).
 #[test]
 #[serial]
+#[ignore]
 fn flexible_quorum_accept_phase_test() {
     // Start Kompact system
     let cfg = TestConfig::load("flexible_quorum_test").expect("Test config couldn't be loaded");

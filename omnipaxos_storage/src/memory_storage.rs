@@ -1,6 +1,6 @@
 use omnipaxos::{
-    ballot_leader_election::Ballot,
     storage::{Entry, StopSign, Storage, StorageOp, StorageResult},
+    utils::Ballot,
 };
 /// An in-memory storage implementation for SequencePaxos.
 #[derive(Clone)]

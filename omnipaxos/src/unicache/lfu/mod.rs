@@ -205,14 +205,14 @@ impl<'a, K: Hash + Eq + Clone, V> IntoIterator for &'a LFUCache<K, V> {
     type IntoIter = LfuIterator<'a, K, V>;
 
     fn into_iter(self) -> Self::IntoIter {
-        return self.iter();
+        self.iter()
     }
 }
 
 impl<K: Hash + Eq + Clone, V> Index<K> for LFUCache<K, V> {
     type Output = V;
     fn index(&self, index: K) -> &Self::Output {
-        return self.values.get(&index).map(|x| &x.value).unwrap();
+        self.values.get(&index).map(|x| &x.value).unwrap()
     }
 }
 

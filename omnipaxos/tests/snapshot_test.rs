@@ -2,7 +2,7 @@ pub mod utils;
 
 use crate::utils::{omnireplica::OmniPaxosComponent, ValueSnapshot};
 use kompact::prelude::{promise, Ask, Component, FutureCollection};
-use omnipaxos::{storage::Snapshot, util::LogEntry};
+use omnipaxos::{storage::Snapshot, utils::LogEntry};
 use serial_test::serial;
 use std::{sync::Arc, thread};
 use utils::{TestConfig, TestSystem, Value};

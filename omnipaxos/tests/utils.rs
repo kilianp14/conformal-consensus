@@ -1,11 +1,10 @@
 use self::omnireplica::OmniPaxosComponent;
 use kompact::{config_keys::system, executors::crossbeam_workstealing_pool, prelude::*};
 use omnipaxos::{
-    ballot_leader_election::Ballot,
     macros::*,
     messages::Message,
     storage::{Entry, Snapshot, Storage, StorageResult},
-    util::{FlexibleQuorum, NodeId},
+    utils::{Ballot, FlexibleQuorum, NodeId},
     ClusterConfig, OmniPaxosConfig, ServerConfig,
 };
 use omnipaxos_storage::{
@@ -741,9 +740,8 @@ impl TestSystem {
 pub mod omnireplica {
     use super::*;
     use omnipaxos::{
-        ballot_leader_election::Ballot,
         messages::Message,
-        util::{LogEntry, NodeId},
+        utils::{Ballot, LogEntry, NodeId},
         OmniPaxos,
     };
     use std::collections::{HashMap, HashSet};
@@ -1000,7 +998,7 @@ pub mod verification {
     use super::{Value, ValueSnapshot};
     use omnipaxos::{
         storage::{Snapshot, StopSign},
-        util::{LogEntry, NodeId},
+        utils::{LogEntry, NodeId},
     };
 
     /// Verify that the log matches the proposed values, Depending on

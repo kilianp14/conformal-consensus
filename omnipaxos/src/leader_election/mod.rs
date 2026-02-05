@@ -1,66 +1,18 @@
-use std::cmp::Ordering;
-
 /// Ballot Leader Election algorithm for electing new leaders
-use crate::{
-    sequence_paxos::{Phase, Role},
-    util::{defaults::*, ConfigurationId, FlexibleQuorum, Quorum},
-};
+use crate::utils::{defaults::*, ConfigurationId, FlexibleQuorum, Phase, Quorum, Role};
 
 #[cfg(feature = "logging")]
 use crate::utils::logger::create_logger;
 use crate::{
-    messages::ballot_leader_election::{
-        BLEMessage, HeartbeatMsg, HeartbeatReply, HeartbeatRequest,
-    },
-    util::NodeId,
+    utils::{Ballot, NodeId},
     OmniPaxosConfig,
 };
-#[cfg(feature = "serde")]
-use serde::{Deserialize, Serialize};
 #[cfg(feature = "logging")]
 use slog::{info, trace, Logger};
 
-/// Used to define a Sequence Paxos epoch
-#[derive(Clone, Copy, Eq, Debug, Default, PartialEq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct Ballot {
-    /// The identifier for the configuration that the replica with this ballot is part of.
-    pub config_id: ConfigurationId,
-    /// Ballot number
-    pub n: u32,
-    /// Custom priority parameter
-    pub priority: u32,
-    /// The pid of the process
-    pub pid: NodeId,
-}
-
-impl Ballot {
-    /// Creates a new Ballot
-    /// # Arguments
-    /// * `config_id` - The identifier for the configuration that the replica with this ballot is part of.
-    /// * `n` - Ballot number.
-    /// * `pid` -  Used as tiebreaker for total ordering of ballots.
-    pub fn with(config_id: ConfigurationId, n: u32, priority: u32, pid: NodeId) -> Ballot {
-        Ballot {
-            config_id,
-            n,
-            priority,
-            pid,
-        }
-    }
-}
-
-impl Ord for Ballot {
-    fn cmp(&self, other: &Self) -> Ordering {
-        (self.n, self.priority, self.pid).cmp(&(other.n, other.priority, other.pid))
-    }
-}
-
-impl PartialOrd for Ballot {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
+/// The different messages used by the BallotLeaderElection layer
+pub mod messages;
+use messages::*;
 
 const INITIAL_ROUND: u32 = 1;
 const RECOVERY_ROUND: u32 = 0;
@@ -69,8 +21,6 @@ const RECOVERY_ROUND: u32 = 0;
 /// incoming messages and produces outgoing messages that the user has to fetch periodically and send using a network implementation.
 /// User also has to periodically fetch the decided entries that are guaranteed to be strongly consistent and linearizable, and therefore also safe to be used in the higher level application.
 pub(crate) struct BallotLeaderElection {
-    /// The identifier for the configuration that this instance is part of.
-    configuration_id: ConfigurationId,
     /// Process identifier used to uniquely identify this instance.
     pid: NodeId,
     /// Vector that holds the pids of all the other servers.
@@ -116,7 +66,6 @@ impl BallotLeaderElection {
             _ => initial_ballot,
         };
         let mut ble = BallotLeaderElection {
-            configuration_id: config_id,
             pid,
             peers,
             hb_round: 0,
@@ -156,9 +105,9 @@ impl BallotLeaderElection {
         self.current_ballot.priority = p;
     }
 
-    /// Returns reference to outgoing messages
-    pub(crate) fn outgoing_mut(&mut self) -> &mut Vec<BLEMessage> {
-        &mut self.outgoing
+    /// Clears and returns the outgoing messages.
+    pub(crate) fn take_outgoing_messages(&mut self) -> Vec<BLEMessage> {
+        std::mem::take(&mut self.outgoing)
     }
 
     /// Handle an incoming message.
@@ -172,7 +121,7 @@ impl BallotLeaderElection {
     }
 
     /// Initiates a new heartbeat round.
-    pub(crate) fn new_hb_round(&mut self) {
+    fn new_hb_round(&mut self) {
         self.prev_replies = std::mem::take(&mut self.heartbeat_replies);
         self.hb_round += 1;
         #[cfg(feature = "logging")]
@@ -288,7 +237,7 @@ impl BallotLeaderElection {
     }
 
     fn handle_reply(&mut self, rep: HeartbeatReply) {
-        if rep.round == self.hb_round && rep.ballot.config_id == self.configuration_id {
+        if rep.round == self.hb_round && rep.ballot.config_id == self.current_ballot.config_id {
             self.heartbeat_replies.push(rep);
         }
     }

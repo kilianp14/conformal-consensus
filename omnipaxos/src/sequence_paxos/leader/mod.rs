@@ -1,5 +1,4 @@
-use super::super::ballot_leader_election::Ballot;
-use crate::util::{AcceptedMetaData, PromiseMetaData, WRITE_ERROR_MSG};
+use crate::utils::{AcceptedMetaData, Ballot, PromiseMetaData, WRITE_ERROR_MSG};
 
 use super::*;
 

@@ -1,14 +1,15 @@
 use crate::{
-    ballot_leader_election::{Ballot, BallotLeaderElection},
     errors::{valid_config, ConfigError},
+    leader_election::BallotLeaderElection,
     messages::Message,
-    sequence_paxos::{Phase, SequencePaxos},
+    predictor::ConformalModePredictor,
+    sequence_paxos::SequencePaxos,
     storage::{Entry, StopSign, Storage},
-    util::{
+    utils::{
         defaults::{BUFFER_SIZE, ELECTION_TIMEOUT, FLUSH_BATCH_TIMEOUT, RESEND_MESSAGE_TIMEOUT},
-        ConfigurationId, FlexibleQuorum, LogEntry, LogicalClock, NodeId,
+        ui::{self, ClusterState},
+        Ballot, ConfigurationId, FlexibleQuorum, LogEntry, LogicalClock, NodeId, Phase,
     },
-    utils::{ui, ui::ClusterState},
 };
 #[cfg(any(feature = "toml_config", feature = "serde"))]
 use serde::Deserialize;
@@ -72,6 +73,7 @@ impl OmniPaxosConfig {
             resend_message_clock: LogicalClock::with(
                 self.server_config.resend_message_tick_timeout,
             ),
+            mode_predictor: ConformalModePredictor {},
             flush_batch_clock: LogicalClock::with(self.server_config.flush_batch_tick_timeout),
             seq_paxos: SequencePaxos::with(self.into(), storage),
         })
@@ -227,6 +229,7 @@ where
 {
     seq_paxos: SequencePaxos<T, B>,
     ble: BallotLeaderElection,
+    mode_predictor: ConformalModePredictor,
     election_clock: LogicalClock,
     resend_message_clock: LogicalClock,
     flush_batch_clock: LogicalClock,
@@ -289,8 +292,11 @@ where
 
     /// Moves outgoing messages from this server into the buffer. The messages should then be sent via the network implementation.
     pub fn take_outgoing_messages(&mut self, buffer: &mut Vec<Message<T>>) {
-        self.seq_paxos.take_outgoing_msgs(buffer);
-        buffer.extend(self.ble.outgoing_mut().drain(..).map(|b| Message::BLE(b)));
+        let paxos_msgs = self.seq_paxos.take_outgoing_messages();
+        buffer.extend(paxos_msgs.into_iter().map(Message::SequencePaxos));
+
+        let ble_msgs = self.ble.take_outgoing_messages();
+        buffer.extend(ble_msgs.into_iter().map(Message::BLE));
     }
 
     /// Read entry at index `idx` in the log. Returns `None` if `idx` is out of bounds.

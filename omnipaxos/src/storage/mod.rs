@@ -1,10 +1,9 @@
 pub(crate) mod internal_storage;
 mod state_cache;
 
-use super::ballot_leader_election::Ballot;
 #[cfg(feature = "unicache")]
 use crate::unicache::*;
-use crate::ClusterConfig;
+use crate::{utils::Ballot, ClusterConfig};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::{error::Error, fmt::Debug};

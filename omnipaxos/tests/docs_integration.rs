@@ -11,7 +11,7 @@ mod docs_integration_test {
     #![cfg(feature = "toml_config")]
 
     use omnipaxos::{
-        messages::Message, storage::Snapshot, util::LogEntry, ClusterConfig, OmniPaxos,
+        messages::Message, storage::Snapshot, utils::LogEntry, ClusterConfig, OmniPaxos,
         OmniPaxosConfig, ServerConfig,
     };
     use omnipaxos_storage::{
@@ -348,7 +348,7 @@ mod docs_integration_test {
     // https://github.com/haraldng/omnipaxos/blob/master/docs/omnipaxos/flexible_quorums.md
     fn flexible_quorums() {
         // CODE_EXAMPLE
-        use omnipaxos::{util::FlexibleQuorum, ClusterConfig, OmniPaxosConfig, ServerConfig};
+        use omnipaxos::{utils::FlexibleQuorum, ClusterConfig, OmniPaxosConfig, ServerConfig};
 
         let flex_quorum = FlexibleQuorum {
             read_quorum_size: 5,

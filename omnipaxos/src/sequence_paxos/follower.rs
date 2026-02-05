@@ -1,8 +1,6 @@
-use super::super::ballot_leader_election::Ballot;
-
 use super::*;
 
-use crate::util::{MessageStatus, WRITE_ERROR_MSG};
+use crate::utils::{Ballot, MessageStatus, WRITE_ERROR_MSG};
 
 impl<T, B> SequencePaxos<T, B>
 where

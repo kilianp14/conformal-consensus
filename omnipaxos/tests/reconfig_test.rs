@@ -3,7 +3,7 @@ pub mod utils;
 use crate::utils::STOPSIGN_ID;
 use kompact::prelude::{promise, Ask};
 use omnipaxos::{
-    util::{LogEntry, NodeId},
+    utils::{LogEntry, NodeId},
     ClusterConfig,
 };
 use serial_test::serial;

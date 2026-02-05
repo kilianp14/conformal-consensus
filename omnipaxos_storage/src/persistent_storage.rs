@@ -1,6 +1,6 @@
 use omnipaxos::{
-    ballot_leader_election::Ballot,
     storage::{Entry, StopSign, Storage, StorageOp, StorageResult},
+    utils::Ballot,
 };
 use rocksdb::{ColumnFamilyDescriptor, ColumnFamilyRef, Options, WriteBatchWithTransaction, DB};
 use serde::{Deserialize, Serialize};

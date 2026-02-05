@@ -1,12 +1,11 @@
 use super::state_cache::StateCache;
 use crate::{
-    ballot_leader_election::Ballot,
     storage::{Entry, Snapshot, SnapshotType, StopSign, Storage, StorageOp, StorageResult},
-    util::{AcceptedMetaData, IndexEntry, LogEntry, LogSync, SnapshottedEntry},
+    utils::{AcceptedMetaData, Ballot, IndexEntry, LogEntry, LogSync, SnapshottedEntry},
     CompactionErr,
 };
 #[cfg(feature = "unicache")]
-use crate::{unicache::*, util::NodeId};
+use crate::{unicache::*, utils::NodeId};
 use std::{
     cmp::Ordering,
     marker::PhantomData,

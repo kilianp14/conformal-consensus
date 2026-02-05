@@ -12,18 +12,18 @@
 
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![deny(missing_docs)]
-/// Trait and struct related to the leader election in Omni-Paxos.
-pub mod ballot_leader_election;
 /// OmniPaxos error definitions
 pub mod errors;
+/// Trait and struct related to the leader election in Omni-Paxos.
+pub mod leader_election;
 /// The different messages OmniPaxos servers can communicate to each other with.
 pub mod messages;
 /// The user-facing OmniPaxos struct.
 mod omni_paxos;
-pub use omni_paxos::*;
-
+/// Conformal predictor for mode switching
+pub mod predictor;
 /// The core replication algorithm of OmniPaxos.
-pub(crate) mod sequence_paxos;
+pub mod sequence_paxos;
 /// Traits and structs related to the backend storage of an OmniPaxos server.
 pub mod storage;
 
@@ -31,14 +31,14 @@ pub mod storage;
 /// Traits, structs, and types related to the unicache.
 pub mod unicache;
 /// A module containing helper functions and structs.
-pub mod util;
-/// A module containing helper functions and structs.
 pub mod utils;
 
 #[cfg(feature = "macros")]
 #[allow(unused_imports)]
 #[macro_use]
 extern crate omnipaxos_macros;
+
+pub use omni_paxos::*;
 
 #[cfg(feature = "macros")]
 /// Macros in the omnipaxos crate

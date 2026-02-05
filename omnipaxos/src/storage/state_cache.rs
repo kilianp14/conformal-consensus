@@ -1,7 +1,7 @@
 use super::{internal_storage::InternalStorageConfig, Entry, StopSign};
-use crate::ballot_leader_election::Ballot;
+use crate::utils::Ballot;
 #[cfg(feature = "unicache")]
-use crate::{unicache::*, util::NodeId};
+use crate::{unicache::*, utils::NodeId};
 
 /// A simple in-memory storage for simple state values of OmniPaxos.
 pub(super) struct StateCache<T>

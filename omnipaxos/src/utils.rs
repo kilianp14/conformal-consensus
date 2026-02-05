@@ -1,10 +1,13 @@
-use crate::{
-    ballot_leader_election::Ballot,
-    storage::{Entry, SnapshotType, StopSign},
-};
+use crate::storage::{Entry, SnapshotType, StopSign};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::{cmp::Ordering, fmt::Debug, marker::PhantomData};
+
+/// Holds helpful functions used in creating loggers.
+#[cfg(feature = "logging")]
+pub mod logger;
+/// Holds helpful functions used in OmniPaxosUI.
+pub mod ui;
 
 /// Struct used to help another server synchronize their log with the current state of our own log.
 #[derive(Clone, Debug)]
@@ -100,11 +103,14 @@ where
 }
 
 pub(crate) mod defaults {
+    use super::Mode;
+
     pub(crate) const BUFFER_SIZE: usize = 100000;
     pub(crate) const BLE_BUFFER_SIZE: usize = 100;
     pub(crate) const ELECTION_TIMEOUT: u64 = 1;
     pub(crate) const RESEND_MESSAGE_TIMEOUT: u64 = 100;
     pub(crate) const FLUSH_BATCH_TIMEOUT: u64 = 200;
+    pub(crate) const DEFAULT_MODE: Mode = Mode::OmniPaxos;
 }
 
 #[allow(missing_docs)]
@@ -151,6 +157,48 @@ impl SequenceNumber {
         } else {
             MessageStatus::DroppedPreceding
         }
+    }
+}
+
+/// Used to define a Sequence Paxos epoch
+#[derive(Clone, Copy, Eq, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct Ballot {
+    /// The identifier for the configuration that the replica with this ballot is part of.
+    pub config_id: ConfigurationId,
+    /// Ballot number
+    pub n: u32,
+    /// Custom priority parameter
+    pub priority: u32,
+    /// The pid of the process
+    pub pid: NodeId,
+}
+
+impl Ballot {
+    /// Creates a new Ballot
+    /// # Arguments
+    /// * `config_id` - The identifier for the configuration that the replica with this ballot is part of.
+    /// * `n` - Ballot number.
+    /// * `pid` -  Used as tiebreaker for total ordering of ballots.
+    pub fn with(config_id: ConfigurationId, n: u32, priority: u32, pid: NodeId) -> Ballot {
+        Ballot {
+            config_id,
+            n,
+            priority,
+            pid,
+        }
+    }
+}
+
+impl Ord for Ballot {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (self.n, self.priority, self.pid).cmp(&(other.n, other.priority, other.pid))
+    }
+}
+
+impl PartialOrd for Ballot {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -223,6 +271,26 @@ impl Quorum {
             Quorum::Flexible(flex_quorum) => num_nodes >= flex_quorum.write_quorum_size,
         }
     }
+}
+
+#[derive(PartialEq, Debug)]
+pub(crate) enum Phase {
+    Prepare,
+    Accept,
+    Recover,
+    None,
+}
+
+#[derive(PartialEq, Debug)]
+pub(crate) enum Role {
+    Follower,
+    Leader,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Mode {
+    FastPaxos,
+    OmniPaxos,
 }
 
 /// Promise without the log update

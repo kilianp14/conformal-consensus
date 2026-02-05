@@ -14,19 +14,17 @@ pub mod utils;
 
 use crate::utils::StorageType;
 #[cfg(not(feature = "unicache"))]
-use omnipaxos::messages::sequence_paxos::{AcceptDecide, Compaction};
+use omnipaxos::sequence_paxos::messages::{AcceptDecide, Compaction};
 #[cfg(feature = "unicache")]
 use omnipaxos::storage::Entry;
 #[cfg(feature = "unicache")]
 use omnipaxos::unicache::UniCache;
 use omnipaxos::{
-    messages::{
-        ballot_leader_election::{BLEMessage, HeartbeatMsg, HeartbeatReply},
-        sequence_paxos::{AcceptSync, PaxosMessage, PaxosMsg, Prepare, Promise},
-        Message,
-    },
+    leader_election::messages::{BLEMessage, HeartbeatMsg, HeartbeatReply},
+    messages::Message,
+    sequence_paxos::messages::{AcceptSync, PaxosMessage, PaxosMsg, Prepare, Promise},
     storage::{Snapshot, SnapshotType, Storage},
-    util::{LogSync, NodeId, SequenceNumber},
+    utils::{LogSync, NodeId, SequenceNumber},
     OmniPaxos, OmniPaxosConfig,
 };
 use omnipaxos_storage::memory_storage::MemoryStorage;

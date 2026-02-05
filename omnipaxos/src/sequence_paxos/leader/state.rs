@@ -1,8 +1,7 @@
 use crate::{
-    ballot_leader_election::Ballot,
     sequence_paxos::Promise,
     storage::Entry,
-    util::{LogSync, NodeId, PromiseMetaData, Quorum, SequenceNumber},
+    utils::{Ballot, LogSync, NodeId, PromiseMetaData, Quorum, SequenceNumber},
 };
 
 #[derive(Debug, Clone)]

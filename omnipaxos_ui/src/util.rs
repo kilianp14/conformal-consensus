@@ -1,5 +1,5 @@
 use crate::{app::Node, UIAppConfig};
-use omnipaxos::{ballot_leader_election::Ballot, OmniPaxosConfig};
+use omnipaxos::{utils::Ballot, OmniPaxosConfig};
 
 pub(crate) mod defaults {
     use ratatui::prelude::Color;
