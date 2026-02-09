@@ -161,7 +161,7 @@ impl SequenceNumber {
 }
 
 /// Used to define a Sequence Paxos epoch
-#[derive(Clone, Copy, Eq, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Eq, Debug, Default, PartialEq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Ballot {
     /// The identifier for the configuration that the replica with this ballot is part of.

@@ -19,11 +19,11 @@ mod follower;
 mod leader;
 /// The different messages used by the SequencePaxos layer
 pub mod messages;
-mod messaging;
+mod temp;
+mod util;
 
 pub(crate) use leader::LeaderState;
 use messages::*;
-use messaging::PeerConnectivity;
 
 /// Configuration for `SequencePaxos`.
 /// # Fields
@@ -91,7 +91,6 @@ where
     cached_promise_message: Option<Promise<T>>,
     quorum_size: usize,
     super_quorum_size: usize,
-    peer_connectivity: PeerConnectivity,
     mode: Mode,
     #[cfg(feature = "logging")]
     logger: Logger,
@@ -149,7 +148,6 @@ where
         let internal_storage_config = InternalStorageConfig {
             batch_size: config.batch_size,
         };
-        let peer_connectivity = PeerConnectivity::new(*max_peer_pid, quorum);
         let mode = DEFAULT_MODE;
         let mut paxos = SequencePaxos {
             internal_storage: InternalStorage::with(
@@ -170,7 +168,6 @@ where
             cached_promise_message: None,
             quorum_size,
             super_quorum_size,
-            peer_connectivity,
             mode,
             #[cfg(feature = "logging")]
             logger: {
@@ -259,16 +256,6 @@ where
             *e.downcast()
                 .expect("storage error while trying to snapshot log")
         })
-    }
-
-    /// Return the decided index.
-    pub(crate) fn get_decided_idx(&self) -> usize {
-        self.internal_storage.get_decided_idx()
-    }
-
-    /// Return trim index from storage.
-    pub(crate) fn get_compacted_idx(&self) -> usize {
-        self.internal_storage.get_compacted_idx()
     }
 
     fn handle_compaction(&mut self, c: Compaction) {
@@ -443,6 +430,47 @@ where
             suffix,
             sync_idx,
             stopsign: self.internal_storage.get_stopsign(),
+        }
+    }
+
+    pub(crate) fn send_msg_to(&mut self, pid: NodeId, msg: PaxosMsg<T>) {
+        self.outgoing.push(PaxosMessage {
+            from: self.pid,
+            to: pid,
+            msg,
+        });
+    }
+
+    pub(crate) fn send_to_all_peers(&mut self, msg: PaxosMsg<T>) {
+        for pid in &self.peers {
+            let m = PaxosMessage {
+                from: self.pid,
+                to: *pid,
+                msg: msg.clone(),
+            };
+            self.outgoing.push(m);
+        }
+    }
+
+    /// Handle an incoming message.
+    pub(crate) fn handle(&mut self, m: PaxosMessage<T>) {
+        match m.msg {
+            PaxosMsg::PrepareReq(prepreq) => self.handle_preparereq(prepreq, m.from),
+            PaxosMsg::Prepare(prep) => self.handle_prepare(prep, m.from),
+            PaxosMsg::Promise(prom) => match &self.state {
+                (Role::Leader, Phase::Prepare) => self.handle_promise_prepare(prom, m.from),
+                (Role::Leader, Phase::Accept) => self.handle_promise_accept(prom, m.from),
+                _ => {}
+            },
+            PaxosMsg::AcceptSync(acc_sync) => self.handle_acceptsync(acc_sync, m.from),
+            PaxosMsg::AcceptDecide(acc) => self.handle_acceptdecide(acc),
+            PaxosMsg::NotAccepted(not_acc) => self.handle_notaccepted(not_acc, m.from),
+            PaxosMsg::Accepted(accepted) => self.handle_accepted(accepted, m.from),
+            PaxosMsg::Decide(d) => self.handle_decide(d),
+            PaxosMsg::ProposalForward(proposals) => self.handle_forwarded_proposal(proposals),
+            PaxosMsg::Compaction(c) => self.handle_compaction(c),
+            PaxosMsg::AcceptStopSign(acc_ss) => self.handle_accept_stopsign(acc_ss),
+            PaxosMsg::ForwardStopSign(f_ss) => self.handle_forwarded_stopsign(f_ss),
         }
     }
 }

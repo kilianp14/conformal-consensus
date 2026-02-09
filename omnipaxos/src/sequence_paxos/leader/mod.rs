@@ -28,7 +28,7 @@ where
             self.internal_storage.set_promise(n).expect(WRITE_ERROR_MSG);
             /* insert my promise */
             let na = self.internal_storage.get_accepted_round();
-            let decided_idx = self.get_decided_idx();
+            let decided_idx = self.internal_storage.get_decided_idx();
             let accepted_idx = self.internal_storage.get_accepted_idx();
             let my_promise = Promise {
                 n,
@@ -167,7 +167,7 @@ where
         let acc_sync = AcceptSync {
             n: current_n,
             seq_num: self.leader_state.next_seq_num(to),
-            decided_idx: self.get_decided_idx(),
+            decided_idx: self.internal_storage.get_decided_idx(),
             log_sync,
             #[cfg(feature = "unicache")]
             unicache: self.internal_storage.get_unicache(),

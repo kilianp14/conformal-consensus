@@ -87,10 +87,14 @@ where
             let entries = acc_dec.entries;
             #[cfg(feature = "unicache")]
             let entries = self.internal_storage.decode_entries(acc_dec.entries);
-            let mut new_accepted_idx = self
+            let accept_metadata = self
                 .internal_storage
-                .append_entries_and_get_accepted_idx(entries)
+                .append_entries_with_batching(entries)
                 .expect(WRITE_ERROR_MSG);
+            let mut new_accepted_idx = match accept_metadata {
+                Some(metadata) => Some(metadata.accepted_idx),
+                None => None,
+            };
             let flushed_after_decide =
                 self.update_decided_idx_and_get_accepted_idx(acc_dec.decided_idx);
             if flushed_after_decide.is_some() {
@@ -110,10 +114,11 @@ where
             // Flush entries before appending stopsign. The accepted index is ignored here as
             // it will be updated when appending stopsign.
             let _ = self.internal_storage.flush_batch().expect(WRITE_ERROR_MSG);
-            let new_accepted_idx = self
+            let _ = self
                 .internal_storage
-                .set_stopsign(Some(acc_ss.ss))
+                .append_stopsign(acc_ss.ss)
                 .expect(WRITE_ERROR_MSG);
+            let new_accepted_idx = self.internal_storage.get_accepted_idx();
             self.reply_accepted(acc_ss.n, new_accepted_idx);
         }
     }

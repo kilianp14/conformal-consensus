@@ -251,21 +251,6 @@ where
         }
     }
 
-    // Append entries in batch, if the batch size is reached, flush the batch and return the
-    // accepted index. If the batch size is not reached, return None.
-    pub(crate) fn append_entries_and_get_accepted_idx(
-        &mut self,
-        entries: Vec<T>,
-    ) -> StorageResult<Option<usize>> {
-        let append_res = self.state_cache.append_entries(entries);
-        if let Some(flushed_entries) = append_res {
-            let accepted_idx = self.append_entries_without_batching(flushed_entries)?;
-            Ok(Some(accepted_idx))
-        } else {
-            Ok(None)
-        }
-    }
-
     #[cfg(feature = "unicache")]
     pub(crate) fn decode_entries(
         &mut self,
@@ -363,7 +348,7 @@ where
         self.create_snapshot(log_decided_idx)
     }
 
-    pub(crate) fn create_snapshot(&self, compact_idx: usize) -> StorageResult<T::Snapshot> {
+    fn create_snapshot(&self, compact_idx: usize) -> StorageResult<T::Snapshot> {
         let current_compacted_idx = self.get_compacted_idx();
         if compact_idx < current_compacted_idx {
             Err(CompactionErr::TrimmedIndex(current_compacted_idx))?
@@ -476,7 +461,7 @@ where
         self.state_cache.accepted_round
     }
 
-    pub(crate) fn get_entries(&self, from: usize, to: usize) -> StorageResult<Vec<T>> {
+    fn get_entries(&self, from: usize, to: usize) -> StorageResult<Vec<T>> {
         self.storage.get_entries(from, to)
     }
 
@@ -493,17 +478,6 @@ where
         self.state_cache.promise
     }
 
-    pub(crate) fn set_stopsign(&mut self, ss: Option<StopSign>) -> StorageResult<usize> {
-        if ss.is_some() && self.state_cache.stopsign.is_none() {
-            self.state_cache.accepted_idx += 1;
-        } else if ss.is_none() && self.state_cache.stopsign.is_some() {
-            self.state_cache.accepted_idx -= 1;
-        }
-        self.state_cache.stopsign.clone_from(&ss);
-        self.storage.set_stopsign(ss)?;
-        Ok(self.state_cache.accepted_idx)
-    }
-
     pub(crate) fn get_stopsign(&self) -> Option<StopSign> {
         self.state_cache.stopsign.clone()
     }
@@ -513,7 +487,7 @@ where
         self.state_cache.stopsign_is_decided()
     }
 
-    pub(crate) fn get_snapshot(&self) -> StorageResult<Option<T::Snapshot>> {
+    fn get_snapshot(&self) -> StorageResult<Option<T::Snapshot>> {
         self.storage.get_snapshot()
     }
 
