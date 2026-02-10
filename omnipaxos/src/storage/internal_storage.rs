@@ -252,6 +252,11 @@ where
     }
 
     #[cfg(feature = "unicache")]
+    pub(crate) fn decode_entry(&mut self, encoded_entry: <T as Entry>::EncodeResult) -> T {
+        self.state_cache.unicache.decode(encoded_entry)
+    }
+
+    #[cfg(feature = "unicache")]
     pub(crate) fn decode_entries(
         &mut self,
         encoded_entries: Vec<<T as Entry>::EncodeResult>,

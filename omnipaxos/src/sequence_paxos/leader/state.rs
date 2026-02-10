@@ -3,6 +3,25 @@ use crate::{
     storage::Entry,
     utils::{Ballot, LogSync, NodeId, PromiseMetaData, Quorum, SequenceNumber},
 };
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+use std::{cmp::Ordering, collections::HashMap};
+
+type DataId = (NodeId, usize);
+
+#[derive(Copy, Clone, Debug, Ord, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+struct Proposal {
+    pub n: Ballot,
+    pub version: usize,
+    pub data_id: DataId,
+}
+
+impl PartialOrd for Proposal {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some((self.n, self.version).cmp(&(other.n, other.version)))
+    }
+}
 
 #[derive(Debug, Clone)]
 /// The promise state of a node.
@@ -13,6 +32,65 @@ enum PromiseState {
     Promised(PromiseMetaData),
     /// Promised to a leader who's ballot is greater than mine
     PromisedHigher,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum ProposalResult {
+    // A majority has not voted yet
+    NotEnoughVotes,
+    // A quorum has voted, but vote is not uniform
+    SlowPath(Proposal),
+    // A quorum has voted uniformly, but a fast quorum has not been achieved yet
+    // If fast quorum takes too long, a slow path could be initiated
+    Pending,
+    // A fast quorum has voted uniformly
+    FastPath(Proposal),
+}
+
+#[derive(Debug, Clone)]
+struct Proposals(HashMap<NodeId, Proposal>);
+
+impl Proposals {
+    pub(crate) fn new(num_nodes: usize) -> Self {
+        Proposals(HashMap::with_capacity(num_nodes))
+    }
+
+    pub(crate) fn add_proposal(&mut self, p: Proposal, from: NodeId) {
+        self.0.insert(from, p);
+    }
+
+    pub fn check_result<T: Entry>(&self, quorum: usize, super_quorum: usize) -> ProposalResult {
+        let num_votes = self.0.len();
+
+        if num_votes < quorum {
+            return ProposalResult::NotEnoughVotes;
+        }
+
+        let mut counts: HashMap<Proposal, usize> = HashMap::new();
+        for proposal in self.0.values() {
+            *counts.entry(*proposal).or_insert(0) += 1;
+        }
+
+        // Find the proposal with the most votes
+        // If there's a tie, the Ord implementation of Proposal acts as a tie-breaker
+        let (most_common_proposal, &max_count) = counts
+            .iter()
+            .max_by(|(p1, count1), (p2, count2)| count1.cmp(count2).then_with(|| p1.cmp(p2)))
+            .unwrap();
+
+        // Non-uniform votes -> Slow path
+        if max_count < num_votes {
+            return ProposalResult::SlowPath(*most_common_proposal);
+        }
+
+        // Super-quorum -> Fast Path with the uniformly voted proposal
+        if num_votes >= super_quorum {
+            return ProposalResult::FastPath(*most_common_proposal);
+        }
+
+        // Super-quorum can still be reached
+        ProposalResult::Pending
+    }
 }
 
 #[derive(Debug, Clone)]

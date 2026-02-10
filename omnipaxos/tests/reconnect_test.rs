@@ -69,7 +69,7 @@ fn increasing_accept_seq_num_test() {
             .filter(|msg| msg.to == follower_id)
             .filter_map(|paxos_message| match &paxos_message.msg {
                 PaxosMsg::AcceptSync(m) => Some(m.seq_num),
-                PaxosMsg::AcceptDecide(m) => Some(m.seq_num),
+                PaxosMsg::SlowAccept(m) => Some(m.seq_num),
                 PaxosMsg::Decide(m) => Some(m.seq_num),
                 _ => None,
             });

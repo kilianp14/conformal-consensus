@@ -72,7 +72,7 @@ where
 /// Message with entries to be replicated and the latest decided index sent by the leader in the accept phase.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct AcceptDecide<T>
+pub struct SlowAccept<T>
 where
     T: Entry,
 {
@@ -88,6 +88,23 @@ where
     #[cfg(feature = "unicache")]
     /// Entries to be replicated.
     pub entries: Vec<T::EncodeResult>,
+}
+
+/// Message with entries to be replicated and the latest decided index sent by the leader in the accept phase.
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct FastAccept<T>
+where
+    T: Entry,
+{
+    /// The current round.
+    pub n: Ballot,
+    #[cfg(not(feature = "unicache"))]
+    /// Entry to be replicated.
+    pub entry: T,
+    #[cfg(feature = "unicache")]
+    /// Entries to be replicated.
+    pub entry: T::EncodeResult,
 }
 
 /// Message sent by follower to leader when entries has been accepted.
@@ -156,7 +173,8 @@ where
     Prepare(Prepare),
     Promise(Promise<T>),
     AcceptSync(AcceptSync<T>),
-    AcceptDecide(AcceptDecide<T>),
+    SlowAccept(SlowAccept<T>),
+    FastAccept(FastAccept<T>),
     Accepted(Accepted),
     NotAccepted(NotAccepted),
     Decide(Decide),

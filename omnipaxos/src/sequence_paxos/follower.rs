@@ -54,6 +54,7 @@ where
                 .sync_log(accsync.n, accsync.decided_idx, Some(accsync.log_sync))
                 .expect(WRITE_ERROR_MSG);
             if self.internal_storage.get_stopsign().is_none() {
+                // TODO: Mode dependent?
                 self.forward_buffered_proposals();
             }
             let accepted = Accepted {
@@ -78,15 +79,26 @@ where
         }
     }
 
-    pub(crate) fn handle_acceptdecide(&mut self, acc_dec: AcceptDecide<T>) {
-        if self.check_valid_ballot(acc_dec.n)
+    pub(crate) fn fast_propose(&mut self, entry: T) {
+        // TODO: Send fast accept
+        let accepted_metadata = self
+            .internal_storage
+            .append_entry_with_batching(entry)
+            .expect(WRITE_ERROR_MSG);
+        if let Some(metadata) = accepted_metadata {
+            // TODO: Send (fast) accepted
+        }
+    }
+
+    pub(crate) fn handle_slow_accept(&mut self, slow_acc: SlowAccept<T>) {
+        if self.check_valid_ballot(slow_acc.n)
             && self.state == (Role::Follower, Phase::Accept)
-            && self.handle_sequence_num(acc_dec.seq_num, acc_dec.n.pid) == MessageStatus::Expected
+            && self.handle_sequence_num(slow_acc.seq_num, slow_acc.n.pid) == MessageStatus::Expected
         {
             #[cfg(not(feature = "unicache"))]
-            let entries = acc_dec.entries;
+            let entries = slow_acc.entries;
             #[cfg(feature = "unicache")]
-            let entries = self.internal_storage.decode_entries(acc_dec.entries);
+            let entries = self.internal_storage.decode_entries(slow_acc.entries);
             let accept_metadata = self
                 .internal_storage
                 .append_entries_with_batching(entries)
@@ -96,12 +108,32 @@ where
                 None => None,
             };
             let flushed_after_decide =
-                self.update_decided_idx_and_get_accepted_idx(acc_dec.decided_idx);
+                self.update_decided_idx_and_get_accepted_idx(slow_acc.decided_idx);
             if flushed_after_decide.is_some() {
                 new_accepted_idx = flushed_after_decide;
             }
             if let Some(idx) = new_accepted_idx {
-                self.reply_accepted(acc_dec.n, idx);
+                self.reply_accepted(slow_acc.n, idx);
+            }
+        }
+    }
+
+    pub(crate) fn handle_fast_accept(&mut self, fast_acc: FastAccept<T>) {
+        if self.state.1 == Phase::Accept {
+            #[cfg(not(feature = "unicache"))]
+            let entry = fast_acc.entry;
+            #[cfg(feature = "unicache")]
+            let entry = self.internal_storage.decode_entry(fast_acc.entry);
+            let accept_metadata = self
+                .internal_storage
+                .append_entry_with_batching(entry)
+                .expect(WRITE_ERROR_MSG);
+            let new_accepted_idx = match accept_metadata {
+                Some(metadata) => Some(metadata.accepted_idx),
+                None => None,
+            };
+            if let Some(idx) = new_accepted_idx {
+                // TODO: Send fast accepted
             }
         }
     }

@@ -9,17 +9,31 @@ use std::{
     collections::{HashMap, HashSet},
 };
 
-type DataId = (NodeId, usize);
-type SlotIdx = usize;
+#[derive(Copy, Clone, Debug, Ord, PartialEq, Eq, Default, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub(crate) struct Proposal {
+    pub n: Ballot,
+    pub version: usize,
+    pub data_id: DataId,
+}
+
+impl PartialOrd for Proposal {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some((self.n, self.version).cmp(&(other.n, other.version)))
+    }
+}
+
+pub type DataId = (NodeId, usize);
+pub type SlotIdx = usize;
 
 #[derive(Debug, Clone)]
-struct Data<T: Entry> {
+pub struct Data<T: Entry> {
     pub(crate) data: Option<T>,
     pub(crate) status: DataStatus,
 }
 
 #[derive(Debug, Clone)]
-enum DataStatus {
+pub enum DataStatus {
     Acked,
     ReplicateAcks(PossibleFastSlots),
     SlowPathWithSlot(SlotIdx),
@@ -28,18 +42,18 @@ enum DataStatus {
 }
 
 #[derive(Debug, Clone)]
-struct ReplicatedData<T: Entry>(HashMap<DataId, Data<T>>);
+pub struct ReplicatedData<T: Entry>(HashMap<DataId, Data<T>>);
 
 impl<T: Entry> ReplicatedData<T> {
-    fn get(&self, data_id: &DataId) -> Option<&Data<T>> {
+    pub fn get(&self, data_id: &DataId) -> Option<&Data<T>> {
         self.0.get(data_id)
     }
 
-    fn with_capacity(capacity: usize) -> Self {
+    pub fn with_capacity(capacity: usize) -> Self {
         ReplicatedData(HashMap::with_capacity(capacity))
     }
 
-    fn complete_and_take_decided_data(&mut self, data_id: &DataId) -> Option<T> {
+    pub fn complete_and_take_decided_data(&mut self, data_id: &DataId) -> Option<T> {
         match self.0.get_mut(data_id) {
             Some(Data { data, status }) => match status {
                 DataStatus::DecidedWithSlot(slot) => {
@@ -54,15 +68,15 @@ impl<T: Entry> ReplicatedData<T> {
         None
     }
 
-    fn get_mut(&mut self, data_id: &DataId) -> Option<&mut Data<T>> {
+    pub fn get_mut(&mut self, data_id: &DataId) -> Option<&mut Data<T>> {
         self.0.get_mut(data_id)
     }
 
-    fn contains_key(&self, data_id: &DataId) -> bool {
+    pub fn contains_key(&self, data_id: &DataId) -> bool {
         self.0.contains_key(data_id)
     }
 
-    fn set_decided_slot(&mut self, data_id: &DataId, slot_idx: usize) {
+    pub fn set_decided_slot(&mut self, data_id: &DataId, slot_idx: usize) {
         let status = DataStatus::DecidedWithSlot(slot_idx);
         match self.0.get_mut(data_id) {
             Some(x) => {
@@ -74,7 +88,7 @@ impl<T: Entry> ReplicatedData<T> {
         }
     }
 
-    fn insert(&mut self, data_id: DataId, data: Data<T>) {
+    pub fn insert(&mut self, data_id: DataId, data: Data<T>) {
         self.0.insert(data_id, data);
     }
 
@@ -92,6 +106,11 @@ pub(crate) struct Slots {
 }
 
 impl Slots {
+    pub fn new() -> Slots {
+        Slots {
+            slots: HashMap::with_capacity(100000),
+        }
+    }
     pub fn clear(&mut self) {
         self.slots.clear();
     }
@@ -186,26 +205,12 @@ pub struct PendingSlot {
     pub decided: bool,
 }
 
-#[derive(Copy, Clone, Debug, Ord, PartialEq, Eq, Default, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct Proposal {
-    n: Ballot,
-    version: usize,
-    data_id: DataId,
-}
-
-impl PartialOrd for Proposal {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some((self.n, self.version).cmp(&(other.n, other.version)))
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct PossibleFastSlots(HashMap<SlotIdx, usize>);
 
 impl PossibleFastSlots {
     pub fn new() -> Self {
-        Self(HashMap::new())
+        Self(HashMap::with_capacity(100))
     }
 
     pub fn add_slot(&mut self, idx: SlotIdx) {
@@ -225,19 +230,20 @@ impl PossibleFastSlots {
     ) -> bool {
         let total: usize = self.0.values().sum();
         let num_slots = self.0.len();
-        if total >= super_quorum {
+        if total < super_quorum {
+            return false;
+        }
+        if num_slots <= 2 {
             for (slot_idx, count) in &self.0 {
-                if count == &quorum && num_slots <= 2 {
+                if count == &quorum {
                     // one slot has a quorum of the same data, so it might still take the fast path
                     if let Some(SlotStatus::FastVotes(_)) = all_slots.get(&slot_idx) {
                         return false;
                     }
                 }
             }
-            true
-        } else {
-            false
         }
+        true
     }
 
     pub fn get_num_votes(&self) -> usize {
@@ -255,77 +261,6 @@ impl PossibleFastSlots {
 }
 
 #[derive(Debug, Clone)]
-pub struct Proposals(pub HashMap<NodeId, Proposal>);
-
-impl Proposals {
-    pub fn new() -> Self {
-        Self([Proposal::default(); NUM_NODES])
-    }
-
-    pub fn initialize_with(p: Proposal, pid: NodeId) -> Self {
-        let mut proposals = Self::new();
-        proposals.add_proposal(p, pid);
-        proposals
-    }
-
-    pub fn add_proposal(&mut self, p: Proposal, from: NodeId) {
-        self.0[pid_to_idx(from)] = p;
-    }
-
-    pub fn check_result<T: Entry>(&self, quorum: usize, super_quorum: usize) -> ProposalResult {
-        let mut num_votes = 0;
-        let mut real_votes = HashSet::with_capacity(NUM_NODES);
-        for p in &self.0 {
-            if p != &Proposal::default() {
-                num_votes += 1;
-                real_votes.insert(*p);
-            }
-        }
-        if num_votes < quorum {
-            return ProposalResult::Pending;
-        }
-        let uniform = real_votes.len() == 1;
-        if num_votes < quorum {
-            return ProposalResult::Pending;
-        } else if num_votes == quorum {
-            if uniform {
-                return ProposalResult::Pending;
-            } else {
-                return ProposalResult::SlowPath(real_votes);
-            }
-        } else if num_votes == super_quorum {
-            if uniform {
-                return ProposalResult::FastPath(*real_votes.iter().next().unwrap());
-            } else {
-                return ProposalResult::SlowPath(real_votes);
-            }
-        } else {
-            return ProposalResult::SlowPath(real_votes);
-        }
-        // ProposalResult::Pending
-    }
-
-    pub fn get_recovery_result(&self) -> DataId {
-        let mut max_proposal = self.0.first().unwrap();
-        let mut max_proposal_count = self.0.iter().filter(|x| x == &max_proposal).count();
-        for p in &self.0 {
-            if (p.n, p.version) >= (max_proposal.n, max_proposal.version) {
-                let count = self.0.iter().filter(|x| x == &p).count();
-                if count > max_proposal_count {
-                    max_proposal = p;
-                    max_proposal_count = count;
-                }
-            }
-        }
-        max_proposal.data_id
-    }
-
-    pub fn get_num_voted(&self) -> usize {
-        self.0.iter().filter(|p| p != &&Proposal::default()).count()
-    }
-}
-
-#[derive(Debug, Clone)]
 pub struct SlotEntries<T> {
     pub(crate) gaps: Vec<SlotIdx>,
     pub(crate) completed_entries: Vec<T>,
@@ -337,12 +272,4 @@ pub enum ProposalResult {
     Pending,
     FastPath(Proposal),
     SlowPath(HashSet<Proposal>),
-}
-
-pub fn pid_to_idx(pid: NodeId) -> usize {
-    pid as usize - 1
-}
-
-pub fn idx_to_pid(idx: usize) -> NodeId {
-    idx as NodeId + 1
 }

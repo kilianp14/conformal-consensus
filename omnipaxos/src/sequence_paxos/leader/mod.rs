@@ -180,7 +180,7 @@ where
         for pid in self.leader_state.get_promised_followers() {
             let latest_accdec = self.get_latest_accdec_message(pid);
             match latest_accdec {
-                // Modify existing AcceptDecide message to follower
+                // Modify existing SlowAccept message to follower
                 Some(accdec) => {
                     accdec.entries.extend(accepted.entries.iter().cloned());
                     accdec.decided_idx = decided_idx;
@@ -189,13 +189,13 @@ where
                 None => {
                     self.leader_state
                         .set_latest_accept_meta(pid, Some(self.outgoing.len()));
-                    let acc = AcceptDecide {
+                    let acc = SlowAccept {
                         n: self.leader_state.n_leader,
                         seq_num: self.leader_state.next_seq_num(pid),
                         decided_idx,
                         entries: accepted.entries.clone(),
                     };
-                    self.send_msg_to(pid, PaxosMsg::AcceptDecide(acc));
+                    self.send_msg_to(pid, PaxosMsg::SlowAccept(acc));
                 }
             }
         }
@@ -317,11 +317,11 @@ where
         }
     }
 
-    fn get_latest_accdec_message(&mut self, to: NodeId) -> Option<&mut AcceptDecide<T>> {
+    fn get_latest_accdec_message(&mut self, to: NodeId) -> Option<&mut SlowAccept<T>> {
         if let Some((bal, outgoing_idx)) = self.leader_state.get_latest_accept_meta(to) {
             if bal == self.leader_state.n_leader {
                 if let PaxosMessage {
-                    msg: PaxosMsg::AcceptDecide(accdec),
+                    msg: PaxosMsg::SlowAccept(accdec),
                     ..
                 } = self.outgoing.get_mut(outgoing_idx).unwrap()
                 {

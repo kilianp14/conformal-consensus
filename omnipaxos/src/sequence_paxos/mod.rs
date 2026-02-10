@@ -19,8 +19,8 @@ mod follower;
 mod leader;
 /// The different messages used by the SequencePaxos layer
 pub mod messages;
-mod temp;
-mod util;
+//mod temp;
+//mod util;
 
 pub(crate) use leader::LeaderState;
 use messages::*;
@@ -366,7 +366,14 @@ where
     fn propose_entry(&mut self, entry: T) {
         match self.state {
             (Role::Leader, Phase::Prepare) => self.buffered_proposals.push(entry),
-            (Role::Leader, Phase::Accept) => self.accept_entry_leader(entry),
+            (Role::Leader, Phase::Accept) => match self.mode {
+                Mode::OmniPaxos => self.accept_entry_leader(entry),
+                Mode::FastPaxos => self.fast_propose(entry),
+            },
+            (Role::Follower, Phase::Accept) => match self.mode {
+                Mode::OmniPaxos => self.forward_proposals(vec![entry]),
+                Mode::FastPaxos => self.fast_propose(entry),
+            },
             _ => self.forward_proposals(vec![entry]),
         }
     }
@@ -463,7 +470,8 @@ where
                 _ => {}
             },
             PaxosMsg::AcceptSync(acc_sync) => self.handle_acceptsync(acc_sync, m.from),
-            PaxosMsg::AcceptDecide(acc) => self.handle_acceptdecide(acc),
+            PaxosMsg::SlowAccept(slow_acc) => self.handle_slow_accept(slow_acc),
+            PaxosMsg::FastAccept(fast_acc) => self.handle_fast_accept(fast_acc),
             PaxosMsg::NotAccepted(not_acc) => self.handle_notaccepted(not_acc, m.from),
             PaxosMsg::Accepted(accepted) => self.handle_accepted(accepted, m.from),
             PaxosMsg::Decide(d) => self.handle_decide(d),
