@@ -23,11 +23,11 @@ where
             let accepted_idx = self.internal_storage.get_accepted_idx();
             let log_sync = if na > prep.n_accepted {
                 // I'm more up to date: send leader what he is missing after his decided index.
-                Some(self.create_log_sync(prep.decided_idx, prep.decided_idx))
+                Some(self.create_log_sync(prep.decided_idx))
             } else if na == prep.n_accepted && accepted_idx > prep.accepted_idx {
                 // I'm more up to date and in same round: send leader what he is missing after his
                 // accepted index.
-                Some(self.create_log_sync(prep.accepted_idx, prep.decided_idx))
+                Some(self.create_log_sync(prep.accepted_idx))
             } else {
                 // I'm equally or less up to date
                 None
@@ -48,15 +48,25 @@ where
 
     pub(crate) fn handle_acceptsync(&mut self, accsync: AcceptSync<T>, from: NodeId) {
         if self.check_valid_ballot(accsync.n) && self.state == (Role::Follower, Phase::Prepare) {
+            #[cfg(feature = "logging")]
+            {
+                let (r, p) = &self.state;
+                info!(
+                    self.logger,
+                    "Self role {:?}, phase {:?}. Incoming Accept Sync from {:?}: {:?}",
+                    r,
+                    p,
+                    from,
+                    accsync
+                );
+            }
             self.cached_promise_message = None;
             let new_accepted_idx = self
                 .internal_storage
                 .sync_log(accsync.n, accsync.decided_idx, Some(accsync.log_sync))
                 .expect(WRITE_ERROR_MSG);
-            if self.internal_storage.get_stopsign().is_none() {
-                // TODO: Mode dependent?
-                self.forward_buffered_proposals();
-            }
+            // TODO: Mode dependent?
+            self.forward_buffered_proposals();
             let accepted = Accepted {
                 n: accsync.n,
                 accepted_idx: new_accepted_idx,
@@ -67,8 +77,6 @@ where
             self.latest_accepted_meta = Some((accsync.n, cached_idx));
 
             self.send_msg_to(from, PaxosMsg::Accepted(accepted));
-            #[cfg(feature = "unicache")]
-            self.internal_storage.set_unicache(accsync.unicache);
         }
     }
 
@@ -95,10 +103,7 @@ where
             && self.state == (Role::Follower, Phase::Accept)
             && self.handle_sequence_num(slow_acc.seq_num, slow_acc.n.pid) == MessageStatus::Expected
         {
-            #[cfg(not(feature = "unicache"))]
             let entries = slow_acc.entries;
-            #[cfg(feature = "unicache")]
-            let entries = self.internal_storage.decode_entries(slow_acc.entries);
             let accept_metadata = self
                 .internal_storage
                 .append_entries_with_batching(entries)
@@ -120,10 +125,7 @@ where
 
     pub(crate) fn handle_fast_accept(&mut self, fast_acc: FastAccept<T>) {
         if self.state.1 == Phase::Accept {
-            #[cfg(not(feature = "unicache"))]
             let entry = fast_acc.entry;
-            #[cfg(feature = "unicache")]
-            let entry = self.internal_storage.decode_entry(fast_acc.entry);
             let accept_metadata = self
                 .internal_storage
                 .append_entry_with_batching(entry)
@@ -135,23 +137,6 @@ where
             if let Some(idx) = new_accepted_idx {
                 // TODO: Send fast accepted
             }
-        }
-    }
-
-    pub(crate) fn handle_accept_stopsign(&mut self, acc_ss: AcceptStopSign) {
-        if self.check_valid_ballot(acc_ss.n)
-            && self.state == (Role::Follower, Phase::Accept)
-            && self.handle_sequence_num(acc_ss.seq_num, acc_ss.n.pid) == MessageStatus::Expected
-        {
-            // Flush entries before appending stopsign. The accepted index is ignored here as
-            // it will be updated when appending stopsign.
-            let _ = self.internal_storage.flush_batch().expect(WRITE_ERROR_MSG);
-            let _ = self
-                .internal_storage
-                .append_stopsign(acc_ss.ss)
-                .expect(WRITE_ERROR_MSG);
-            let new_accepted_idx = self.internal_storage.get_accepted_idx();
-            self.reply_accepted(acc_ss.n, new_accepted_idx);
         }
     }
 

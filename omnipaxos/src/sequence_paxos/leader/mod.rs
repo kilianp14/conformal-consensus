@@ -68,23 +68,10 @@ where
     }
 
     pub(crate) fn handle_forwarded_proposal(&mut self, mut entries: Vec<T>) {
-        if !self.accepted_reconfiguration() {
-            match self.state {
-                (Role::Leader, Phase::Prepare) => self.buffered_proposals.append(&mut entries),
-                (Role::Leader, Phase::Accept) => self.accept_entries_leader(entries),
-                _ => self.forward_proposals(entries),
-            }
-        }
-    }
-
-    pub(crate) fn handle_forwarded_stopsign(&mut self, ss: StopSign) {
-        if self.accepted_reconfiguration() {
-            return;
-        }
         match self.state {
-            (Role::Leader, Phase::Prepare) => self.buffered_stopsign = Some(ss),
-            (Role::Leader, Phase::Accept) => self.accept_stopsign_leader(ss),
-            _ => self.forward_stopsign(ss),
+            (Role::Leader, Phase::Prepare) => self.buffered_proposals.append(&mut entries),
+            (Role::Leader, Phase::Accept) => self.accept_entries_leader(entries),
+            _ => self.forward_proposals(entries),
         }
     }
 
@@ -109,21 +96,6 @@ where
             self.leader_state
                 .set_accepted_idx(self.pid, metadata.accepted_idx);
             self.send_acceptdecide(metadata);
-        }
-    }
-
-    pub(crate) fn accept_stopsign_leader(&mut self, ss: StopSign) {
-        let accepted_metadata = self
-            .internal_storage
-            .append_stopsign(ss.clone())
-            .expect(WRITE_ERROR_MSG);
-        if let Some(metadata) = accepted_metadata {
-            self.send_acceptdecide(metadata);
-        }
-        let accepted_idx = self.internal_storage.get_accepted_idx();
-        self.leader_state.set_accepted_idx(self.pid, accepted_idx);
-        for pid in self.leader_state.get_promised_followers() {
-            self.send_accept_stopsign(pid, ss.clone(), false);
         }
     }
 
@@ -162,15 +134,13 @@ where
         } else {
             followers_decided_idx
         };
-        let log_sync = self.create_log_sync(followers_valid_entries_idx, followers_decided_idx);
+        let log_sync = self.create_log_sync(followers_valid_entries_idx);
         self.leader_state.increment_seq_num_session(to);
         let acc_sync = AcceptSync {
             n: current_n,
             seq_num: self.leader_state.next_seq_num(to),
             decided_idx: self.internal_storage.get_decided_idx(),
             log_sync,
-            #[cfg(feature = "unicache")]
-            unicache: self.internal_storage.get_unicache(),
         };
         self.send_msg_to(to, PaxosMsg::AcceptSync(acc_sync));
     }
@@ -201,19 +171,6 @@ where
         }
     }
 
-    fn send_accept_stopsign(&mut self, to: NodeId, ss: StopSign, resend: bool) {
-        let seq_num = match resend {
-            true => self.leader_state.get_seq_num(to),
-            false => self.leader_state.next_seq_num(to),
-        };
-        let acc_ss = AcceptStopSign {
-            seq_num,
-            n: self.leader_state.n_leader,
-            ss,
-        };
-        self.send_msg_to(to, PaxosMsg::AcceptStopSign(acc_ss));
-    }
-
     pub(crate) fn send_decide(&mut self, to: NodeId, decided_idx: usize, resend: bool) {
         let seq_num = match resend {
             true => self.leader_state.get_seq_num(to),
@@ -234,20 +191,12 @@ where
             .internal_storage
             .sync_log(self.leader_state.n_leader, decided_idx, max_promise_sync)
             .expect(WRITE_ERROR_MSG);
-        if !self.accepted_reconfiguration() {
-            if !self.buffered_proposals.is_empty() {
-                let entries = std::mem::take(&mut self.buffered_proposals);
-                new_accepted_idx = self
-                    .internal_storage
-                    .append_entries_without_batching(entries)
-                    .expect(WRITE_ERROR_MSG);
-            }
-            if let Some(ss) = self.buffered_stopsign.take() {
-                self.internal_storage
-                    .append_stopsign(ss)
-                    .expect(WRITE_ERROR_MSG);
-                new_accepted_idx = self.internal_storage.get_accepted_idx();
-            }
+        if !self.buffered_proposals.is_empty() {
+            let entries = std::mem::take(&mut self.buffered_proposals);
+            new_accepted_idx = self
+                .internal_storage
+                .append_entries_without_batching(entries)
+                .expect(WRITE_ERROR_MSG);
         }
         self.state = (Role::Leader, Phase::Accept);
         self.leader_state
@@ -259,7 +208,7 @@ where
 
     pub(crate) fn handle_promise_prepare(&mut self, prom: Promise<T>, from: NodeId) {
         #[cfg(feature = "logging")]
-        debug!(
+        info!(
             self.logger,
             "Handling promise from {} in Prepare phase", from
         );
@@ -275,7 +224,7 @@ where
         #[cfg(feature = "logging")]
         {
             let (r, p) = &self.state;
-            debug!(
+            info!(
                 self.logger,
                 "Self role {:?}, phase {:?}. Incoming message Promise Accept from {}", r, p, from
             );
@@ -288,7 +237,7 @@ where
 
     pub(crate) fn handle_accepted(&mut self, accepted: Accepted, from: NodeId) {
         #[cfg(feature = "logging")]
-        trace!(
+        info!(
             self.logger,
             "Got Accepted from {}, idx: {}, chosen_idx: {}, accepted: {:?}",
             from,
@@ -352,27 +301,13 @@ where
                 }
             }
             Phase::Accept => {
-                // Resend AcceptStopSign or StopSign's decide
-                if let Some(ss) = self.internal_storage.get_stopsign() {
-                    let decided_idx = self.internal_storage.get_decided_idx();
-                    for follower in self.leader_state.get_promised_followers() {
-                        if self.internal_storage.stopsign_is_decided() {
-                            self.send_decide(follower, decided_idx, true);
-                        } else if self.leader_state.get_accepted_idx(follower)
-                            != self.internal_storage.get_accepted_idx()
-                        {
-                            self.send_accept_stopsign(follower, ss.clone(), true);
-                        }
-                    }
-                }
                 // Resend Prepare
                 let preparable_peers = self.leader_state.get_preparable_peers(&self.peers);
                 for peer in preparable_peers {
                     self.send_prepare(peer);
                 }
             }
-            Phase::Recover => (),
-            Phase::None => (),
+            _ => (),
         }
     }
 

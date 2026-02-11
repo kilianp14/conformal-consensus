@@ -26,10 +26,6 @@ pub mod predictor;
 pub mod sequence_paxos;
 /// Traits and structs related to the backend storage of an OmniPaxos server.
 pub mod storage;
-
-#[cfg(feature = "unicache")]
-/// Traits, structs, and types related to the unicache.
-pub mod unicache;
 /// A module containing helper functions and structs.
 pub mod utils;
 

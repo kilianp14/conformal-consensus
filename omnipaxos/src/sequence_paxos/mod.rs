@@ -3,13 +3,13 @@ use crate::utils::logger::create_logger;
 use crate::{
     storage::{
         internal_storage::{InternalStorage, InternalStorageConfig},
-        Entry, Snapshot, StopSign, Storage,
+        Entry, Storage,
     },
     utils::{
         defaults::DEFAULT_MODE, Ballot, FlexibleQuorum, LogSync, Mode, NodeId, Phase, Quorum, Role,
         SequenceNumber, READ_ERROR_MSG, WRITE_ERROR_MSG,
     },
-    ClusterConfig, CompactionErr, OmniPaxosConfig, ProposeErr,
+    OmniPaxosConfig,
 };
 #[cfg(feature = "logging")]
 use slog::{debug, info, trace, warn, Logger};
@@ -24,6 +24,7 @@ pub mod messages;
 
 pub(crate) use leader::LeaderState;
 use messages::*;
+//use util::ReplicatedData;
 
 /// Configuration for `SequencePaxos`.
 /// # Fields
@@ -82,16 +83,16 @@ where
     peers: Vec<NodeId>, // excluding self pid
     state: (Role, Phase),
     buffered_proposals: Vec<T>,
-    buffered_stopsign: Option<StopSign>,
     outgoing: Vec<PaxosMessage<T>>,
     leader_state: LeaderState<T>,
     latest_accepted_meta: Option<(Ballot, usize)>,
     // Keeps track of sequence of accepts from leader where AcceptSync = 1
     current_seq_num: SequenceNumber,
+    //replicated_data: ReplicatedData<T>,
     cached_promise_message: Option<Promise<T>>,
     quorum_size: usize,
     super_quorum_size: usize,
-    mode: Mode,
+    pub(crate) mode: Mode,
     #[cfg(feature = "logging")]
     logger: Logger,
 }
@@ -113,7 +114,7 @@ where
             Quorum::Flexible(_) => unimplemented!(),
         };
         let super_quorum_size = {
-            let sq = (num_nodes * 3) / 4 + 1;
+            let sq = (num_nodes * 3).div_ceil(4);
             std::cmp::min(num_nodes, sq)
         };
         assert!(
@@ -150,22 +151,17 @@ where
         };
         let mode = DEFAULT_MODE;
         let mut paxos = SequencePaxos {
-            internal_storage: InternalStorage::with(
-                storage,
-                internal_storage_config,
-                #[cfg(feature = "unicache")]
-                pid,
-            ),
+            internal_storage: InternalStorage::with(storage, internal_storage_config),
             pid,
             peers,
             state,
             buffered_proposals: vec![],
-            buffered_stopsign: None,
             outgoing,
             leader_state: LeaderState::<T>::with(leader, max_pid, quorum),
             latest_accepted_meta: None,
             current_seq_num: SequenceNumber::default(),
             cached_promise_message: None,
+            //replicated_data: ReplicatedData::<T>::with_capacity(10000),
             quorum_size,
             super_quorum_size,
             mode,
@@ -202,74 +198,6 @@ where
         &self.state
     }
 
-    /// Initiates the trim process.
-    /// # Arguments
-    /// * `trim_idx` - Deletes all entries up to [`trim_idx`], if the [`trim_idx`] is `None` then the minimum index accepted by **ALL** servers will be used as the [`trim_idx`].
-    pub(crate) fn trim(&mut self, trim_idx: Option<usize>) -> Result<(), CompactionErr> {
-        match self.state {
-            (Role::Leader, _) => {
-                let min_all_accepted_idx = self.leader_state.get_min_all_accepted_idx();
-                let trimmed_idx = match trim_idx {
-                    Some(idx) if idx <= *min_all_accepted_idx => idx,
-                    None => {
-                        #[cfg(feature = "logging")]
-                        trace!(
-                            self.logger,
-                            "No trim index provided, using min_las_idx: {:?}",
-                            min_all_accepted_idx
-                        );
-                        *min_all_accepted_idx
-                    }
-                    _ => {
-                        return Err(CompactionErr::NotAllDecided(*min_all_accepted_idx));
-                    }
-                };
-                let result = self.internal_storage.try_trim(trimmed_idx);
-
-                if result.is_ok() {
-                    self.send_to_all_peers(PaxosMsg::Compaction(Compaction::Trim(trimmed_idx)));
-                }
-                result.map_err(|e| {
-                    *e.downcast()
-                        .expect("storage error while trying to trim log")
-                })
-            }
-            _ => Err(CompactionErr::NotCurrentLeader(self.get_current_leader())),
-        }
-    }
-
-    /// Trim the log and create a snapshot. ** Note: only up to the `decided_idx` can be snapshotted **
-    /// # Arguments
-    /// `idx` - Snapshots all entries with index < [`idx`], if the [`idx`] is None then the decided index will be used.
-    /// `local_only` - If `true`, only this server snapshots the log. If `false` all servers performs the snapshot.
-    pub(crate) fn snapshot(
-        &mut self,
-        idx: Option<usize>,
-        local_only: bool,
-    ) -> Result<(), CompactionErr> {
-        let result = self.internal_storage.try_snapshot(idx);
-        if !local_only && result.is_ok() {
-            // since it is decided, it is ok even for a follower to send this
-            self.send_to_all_peers(PaxosMsg::Compaction(Compaction::Snapshot(idx)));
-        }
-        result.map_err(|e| {
-            *e.downcast()
-                .expect("storage error while trying to snapshot log")
-        })
-    }
-
-    fn handle_compaction(&mut self, c: Compaction) {
-        // try trimming and snapshotting forwarded compaction. Errors are ignored as that the data will still be kept.
-        match c {
-            Compaction::Trim(idx) => {
-                let _ = self.internal_storage.try_trim(idx);
-            }
-            Compaction::Snapshot(idx) => {
-                let _ = self.snapshot(idx, true);
-            }
-        }
-    }
-
     /// Detects if a Prepare, Promise, AcceptStopSign, Decide of a Stopsign, or PrepareReq message
     /// has been sent but not been received. If so resends them. Note: We can't detect if a
     /// StopSign's Decide message has been received so we always resend to be safe.
@@ -297,52 +225,20 @@ where
         msgs
     }
 
-    /// Returns whether this Sequence Paxos has been reconfigured
-    pub(crate) fn is_reconfigured(&self) -> Option<StopSign> {
-        match self.internal_storage.get_stopsign() {
-            Some(ss) if self.internal_storage.stopsign_is_decided() => Some(ss),
-            _ => None,
-        }
-    }
-
-    /// Returns whether this Sequence Paxos instance is stopped, i.e. if it has been reconfigured.
-    fn accepted_reconfiguration(&self) -> bool {
-        self.internal_storage.get_stopsign().is_some()
-    }
-
     /// Append an entry to the replicated log.
-    pub(crate) fn append(&mut self, entry: T) -> Result<(), ProposeErr<T>> {
-        if self.accepted_reconfiguration() {
-            Err(ProposeErr::PendingReconfigEntry(entry))
-        } else {
-            self.propose_entry(entry);
-            Ok(())
-        }
-    }
-
-    /// Propose a reconfiguration. Returns an error if already stopped or `new_config` is invalid.
-    /// `new_config` defines the cluster-wide configuration settings for the next cluster.
-    /// `metadata` is optional data to commit alongside the reconfiguration.
-    pub(crate) fn reconfigure(
-        &mut self,
-        new_config: ClusterConfig,
-        metadata: Option<Vec<u8>>,
-    ) -> Result<(), ProposeErr<T>> {
-        if self.accepted_reconfiguration() {
-            return Err(ProposeErr::PendingReconfigConfig(new_config, metadata));
-        }
-        #[cfg(feature = "logging")]
-        info!(
-            self.logger,
-            "Accepting reconfiguration {:?}", new_config.nodes
-        );
-        let ss = StopSign::with(new_config, metadata);
+    pub(crate) fn append(&mut self, entry: T) {
         match self.state {
-            (Role::Leader, Phase::Prepare) => self.buffered_stopsign = Some(ss),
-            (Role::Leader, Phase::Accept) => self.accept_stopsign_leader(ss),
-            _ => self.forward_stopsign(ss),
+            (Role::Leader, Phase::Prepare) => self.buffered_proposals.push(entry),
+            (Role::Leader, Phase::Accept) => match self.mode {
+                Mode::OmniPaxos => self.accept_entry_leader(entry),
+                Mode::FastPaxos => self.fast_propose(entry),
+            },
+            (Role::Follower, Phase::Accept) => match self.mode {
+                Mode::OmniPaxos => self.forward_proposals(vec![entry]),
+                Mode::FastPaxos => self.fast_propose(entry),
+            },
+            _ => self.forward_proposals(vec![entry]),
         }
-        Ok(())
     }
 
     fn get_current_leader(&self) -> NodeId {
@@ -363,25 +259,6 @@ where
         self.send_msg_to(pid, PaxosMsg::PrepareReq(prepreq));
     }
 
-    fn propose_entry(&mut self, entry: T) {
-        match self.state {
-            (Role::Leader, Phase::Prepare) => self.buffered_proposals.push(entry),
-            (Role::Leader, Phase::Accept) => match self.mode {
-                Mode::OmniPaxos => self.accept_entry_leader(entry),
-                Mode::FastPaxos => self.fast_propose(entry),
-            },
-            (Role::Follower, Phase::Accept) => match self.mode {
-                Mode::OmniPaxos => self.forward_proposals(vec![entry]),
-                Mode::FastPaxos => self.fast_propose(entry),
-            },
-            _ => self.forward_proposals(vec![entry]),
-        }
-    }
-
-    pub(crate) fn get_leader_state(&self) -> &LeaderState<T> {
-        &self.leader_state
-    }
-
     pub(crate) fn forward_proposals(&mut self, mut entries: Vec<T>) {
         let leader = self.get_current_leader();
         if leader > 0 && self.pid != leader {
@@ -392,51 +269,17 @@ where
         }
     }
 
-    pub(crate) fn forward_stopsign(&mut self, ss: StopSign) {
-        let leader = self.get_current_leader();
-        if leader > 0 && self.pid != leader {
-            #[cfg(feature = "logging")]
-            trace!(self.logger, "Forwarding StopSign to Leader {:?}", leader);
-            let fs = PaxosMsg::ForwardStopSign(ss);
-            self.send_msg_to(leader, fs);
-        } else if self.buffered_stopsign.as_mut().is_none() {
-            self.buffered_stopsign = Some(ss);
-        }
-    }
     /// Returns `LogSync`, a struct to help other servers synchronize their log to correspond to the
     /// current state of our own log. The `common_prefix_idx` marks where in the log the other server
     /// needs to be sync from.
-    fn create_log_sync(
-        &self,
-        common_prefix_idx: usize,
-        other_logs_decided_idx: usize,
-    ) -> LogSync<T> {
-        let decided_idx = self.internal_storage.get_decided_idx();
-        let (decided_snapshot, suffix, sync_idx) =
-            if T::Snapshot::use_snapshots() && decided_idx > common_prefix_idx {
-                // Note: We snapshot from the other log's decided index and not the common prefix because
-                // snapshots currently only work on decided entries.
-                let (delta_snapshot, compacted_idx) = self
-                    .internal_storage
-                    .create_diff_snapshot(other_logs_decided_idx)
-                    .expect(READ_ERROR_MSG);
-                let suffix = self
-                    .internal_storage
-                    .get_suffix(decided_idx)
-                    .expect(READ_ERROR_MSG);
-                (delta_snapshot, suffix, compacted_idx)
-            } else {
-                let suffix = self
-                    .internal_storage
-                    .get_suffix(common_prefix_idx)
-                    .expect(READ_ERROR_MSG);
-                (None, suffix, common_prefix_idx)
-            };
+    fn create_log_sync(&self, common_prefix_idx: usize) -> LogSync<T> {
+        let suffix = self
+            .internal_storage
+            .get_suffix(common_prefix_idx)
+            .expect(READ_ERROR_MSG);
         LogSync {
-            decided_snapshot,
             suffix,
-            sync_idx,
-            stopsign: self.internal_storage.get_stopsign(),
+            sync_idx: common_prefix_idx,
         }
     }
 
@@ -476,9 +319,6 @@ where
             PaxosMsg::Accepted(accepted) => self.handle_accepted(accepted, m.from),
             PaxosMsg::Decide(d) => self.handle_decide(d),
             PaxosMsg::ProposalForward(proposals) => self.handle_forwarded_proposal(proposals),
-            PaxosMsg::Compaction(c) => self.handle_compaction(c),
-            PaxosMsg::AcceptStopSign(acc_ss) => self.handle_accept_stopsign(acc_ss),
-            PaxosMsg::ForwardStopSign(f_ss) => self.handle_forwarded_stopsign(f_ss),
         }
     }
 }

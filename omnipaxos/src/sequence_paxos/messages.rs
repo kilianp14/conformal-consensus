@@ -1,5 +1,5 @@
 use crate::{
-    storage::{Entry, StopSign},
+    storage::Entry,
     utils::{Ballot, LogSync, NodeId, SequenceNumber},
 };
 #[cfg(feature = "serde")]
@@ -64,9 +64,6 @@ where
     /// The log update which the follower applies to its log in order to sync
     /// with the leader.
     pub log_sync: LogSync<T>,
-    #[cfg(feature = "unicache")]
-    /// The UniCache of the leader
-    pub unicache: T::UniCache,
 }
 
 /// Message with entries to be replicated and the latest decided index sent by the leader in the accept phase.
@@ -82,12 +79,8 @@ where
     pub seq_num: SequenceNumber,
     /// The decided index.
     pub decided_idx: usize,
-    #[cfg(not(feature = "unicache"))]
     /// Entries to be replicated.
     pub entries: Vec<T>,
-    #[cfg(feature = "unicache")]
-    /// Entries to be replicated.
-    pub entries: Vec<T::EncodeResult>,
 }
 
 /// Message with entries to be replicated and the latest decided index sent by the leader in the accept phase.
@@ -99,12 +92,8 @@ where
 {
     /// The current round.
     pub n: Ballot,
-    #[cfg(not(feature = "unicache"))]
     /// Entry to be replicated.
     pub entry: T,
-    #[cfg(feature = "unicache")]
-    /// Entries to be replicated.
-    pub entry: T::EncodeResult,
 }
 
 /// Message sent by follower to leader when entries has been accepted.
@@ -129,18 +118,6 @@ pub struct Decide {
     pub decided_idx: usize,
 }
 
-/// Message sent by leader to followers to accept a StopSign
-#[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct AcceptStopSign {
-    /// The current round.
-    pub n: Ballot,
-    /// The sequence number of this message in the leader-to-follower accept sequence
-    pub seq_num: SequenceNumber,
-    /// The decided index.
-    pub ss: StopSign,
-}
-
 /// Message sent by follower to leader when accepting an entry is rejected.
 /// This happens when the follower is promised to a greater leader.
 #[derive(Clone, Debug)]
@@ -148,15 +125,6 @@ pub struct AcceptStopSign {
 pub struct NotAccepted {
     /// The follower's current ballot
     pub n: Ballot,
-}
-
-/// Compaction Request
-#[allow(missing_docs)]
-#[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub enum Compaction {
-    Trim(usize),
-    Snapshot(Option<usize>),
 }
 
 /// An enum for all the different message types.
@@ -180,9 +148,6 @@ where
     Decide(Decide),
     /// Forward client proposals to the leader.
     ProposalForward(Vec<T>),
-    Compaction(Compaction),
-    AcceptStopSign(AcceptStopSign),
-    ForwardStopSign(StopSign),
 }
 
 /// A struct for a Paxos message that also includes sender and receiver.

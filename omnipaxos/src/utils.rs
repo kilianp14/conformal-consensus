@@ -1,13 +1,11 @@
-use crate::storage::{Entry, SnapshotType, StopSign};
+use crate::storage::Entry;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-use std::{cmp::Ordering, fmt::Debug, marker::PhantomData};
+use std::{cmp::Ordering, fmt::Debug};
 
 /// Holds helpful functions used in creating loggers.
 #[cfg(feature = "logging")]
 pub mod logger;
-/// Holds helpful functions used in OmniPaxosUI.
-pub mod ui;
 
 /// Struct used to help another server synchronize their log with the current state of our own log.
 #[derive(Clone, Debug)]
@@ -16,14 +14,10 @@ pub struct LogSync<T>
 where
     T: Entry,
 {
-    /// The decided snapshot.
-    pub decided_snapshot: Option<SnapshotType<T>>,
     /// The log suffix.
     pub suffix: Vec<T>,
     /// The index of the log where the entries from `suffix` should be applied at (also the compacted idx of `decided_snapshot` if it exists).
     pub sync_idx: usize,
-    /// The accepted StopSign.
-    pub stopsign: Option<StopSign>,
 }
 
 /// The entry read in the log.
@@ -36,69 +30,15 @@ where
     Decided(T),
     /// The entry is NOT decided. Might be removed from the log at a later time.
     Undecided(T),
-    /// The entry has been trimmed.
-    Trimmed(TrimmedIndex),
-    /// The entry has been snapshotted.
-    Snapshotted(SnapshottedEntry<T>),
-    /// This Sequence Paxos instance has been stopped for reconfiguration. The accompanying bool
-    /// indicates whether the reconfiguration has been decided or not. If it is `true`, then the OmniPaxos instance for the new configuration can be started.
-    StopSign(StopSign, bool),
 }
 
-impl<T: PartialEq + Entry> PartialEq for LogEntry<T>
-where
-    <T as Entry>::Snapshot: PartialEq,
-{
+impl<T: PartialEq + Entry> PartialEq for LogEntry<T> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (LogEntry::Decided(v1), LogEntry::Decided(v2)) => v1 == v2,
             (LogEntry::Undecided(v1), LogEntry::Undecided(v2)) => v1 == v2,
-            (LogEntry::Trimmed(idx1), LogEntry::Trimmed(idx2)) => idx1 == idx2,
-            (LogEntry::Snapshotted(s1), LogEntry::Snapshotted(s2)) => s1 == s2,
-            (LogEntry::StopSign(ss1, b1), LogEntry::StopSign(ss2, b2)) => ss1 == ss2 && b1 == b2,
             _ => false,
         }
-    }
-}
-
-/// Convenience struct for checking if a certain index exists, is compacted or is a StopSign.
-#[derive(Debug, Clone)]
-pub(crate) enum IndexEntry {
-    Entry,
-    Compacted,
-    StopSign(StopSign),
-}
-
-#[allow(missing_docs)]
-#[derive(Debug, Clone)]
-pub struct SnapshottedEntry<T>
-where
-    T: Entry,
-{
-    pub trimmed_idx: TrimmedIndex,
-    pub snapshot: T::Snapshot,
-    _p: PhantomData<T>,
-}
-
-impl<T> SnapshottedEntry<T>
-where
-    T: Entry,
-{
-    pub(crate) fn with(trimmed_idx: usize, snapshot: T::Snapshot) -> Self {
-        Self {
-            trimmed_idx,
-            snapshot,
-            _p: PhantomData,
-        }
-    }
-}
-
-impl<T: Entry> PartialEq for SnapshottedEntry<T>
-where
-    <T as Entry>::Snapshot: PartialEq,
-{
-    fn eq(&self, other: &Self) -> bool {
-        self.trimmed_idx == other.trimmed_idx && self.snapshot == other.snapshot
     }
 }
 
@@ -331,8 +271,5 @@ impl PartialEq for PromiseMetaData {
 /// The entries flushed due to an append operation
 pub(crate) struct AcceptedMetaData<T: Entry> {
     pub accepted_idx: usize,
-    #[cfg(not(feature = "unicache"))]
     pub entries: Vec<T>,
-    #[cfg(feature = "unicache")]
-    pub entries: Vec<T::EncodeResult>,
 }

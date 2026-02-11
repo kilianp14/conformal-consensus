@@ -46,8 +46,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
       - name: Run tests
         run: cargo test --verbose --features default,logging,toml_config --no-fail-fast
-      - name: Run UniCache tests
-        run: cargo test -p omnipaxos --verbose --features default,logging,toml_config,unicache --no-fail-fast
 
   format:
     name: cargo fmt
@@ -74,12 +72,3 @@ jobs:
       - name: Run Clippy
         run: cargo clippy -- -D warnings -W clippy::all
 
-  check_doc_structure:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v6
-      - name: Install dependencies
-        run: npm install js-yaml fs
-      - name: Run Document Structure Check
-        run: node .github/scripts/doc_structure_checker.js

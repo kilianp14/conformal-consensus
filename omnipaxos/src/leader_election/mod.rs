@@ -245,10 +245,6 @@ impl BallotLeaderElection {
     pub(crate) fn get_current_ballot(&self) -> Ballot {
         self.current_ballot
     }
-
-    pub(crate) fn get_ballots(&self) -> Vec<HeartbeatReply> {
-        self.prev_replies.clone()
-    }
 }
 
 /// Configuration for `BallotLeaderElection`.

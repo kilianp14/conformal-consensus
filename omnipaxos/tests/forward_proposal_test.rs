@@ -39,7 +39,7 @@ fn forward_proposal_test() {
     let (kprom, kfuture) = promise();
     px.on_definition(|x| {
         x.insert_decided_future(Ask::new(kprom, v.clone()));
-        x.paxos.append(v.clone()).expect("Failed to call Append");
+        x.paxos.append(v.clone());
     });
 
     kfuture

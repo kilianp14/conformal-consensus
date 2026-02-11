@@ -187,7 +187,7 @@ fn check_last_proposals(proposer: NodeId, recover: NodeId, sys: &TestSystem, cfg
 
     for v in proposals {
         proposer_px.on_definition(|x| {
-            x.paxos.append(v).expect("Failed to append");
+            x.paxos.append(v);
         });
     }
 
@@ -202,9 +202,7 @@ pub fn kill_and_recover_node(sys: &mut TestSystem, cfg: &TestConfig, pid: NodeId
     sys.kill_node(pid);
     thread::sleep(SLEEP_TIMEOUT);
 
-    let storage_path = sys.temp_dir_path.clone();
-    let storage: StorageType<Value> =
-        StorageType::with(cfg.storage_type, &format!("{storage_path}{pid}"));
+    let storage: StorageType<Value> = StorageType::with(cfg.storage_type);
     sys.create_node(pid, cfg, storage);
     sys.start_node(pid);
 }

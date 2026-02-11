@@ -1,17 +1,14 @@
-use crate::{
-    storage::Entry,
-    utils::{Ballot, NodeId},
-};
+use crate::{storage::Entry, utils::NodeId};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-use std::{
-    cmp::Ordering,
-    collections::{HashMap, HashSet},
-};
+use std::collections::HashMap;
 
-#[derive(Copy, Clone, Debug, Ord, PartialEq, Eq, Default, Hash)]
+pub(crate) type DataId = (NodeId, usize);
+pub(crate) type SlotIdx = usize;
+
+#[derive(Copy, Clone, Debug, Ord, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub(crate) struct Proposal {
+struct Proposal {
     pub n: Ballot,
     pub version: usize,
     pub data_id: DataId,
@@ -23,17 +20,73 @@ impl PartialOrd for Proposal {
     }
 }
 
-pub type DataId = (NodeId, usize);
-pub type SlotIdx = usize;
+#[derive(Clone, Debug, PartialEq)]
+enum ProposalResult {
+    // A majority has not voted yet
+    NotEnoughVotes,
+    // A quorum has voted, but vote is not uniform
+    SlowPath(Proposal),
+    // A quorum has voted uniformly, but a fast quorum has not been achieved yet
+    // If fast quorum takes too long, a slow path could be initiated
+    Pending,
+    // A fast quorum has voted uniformly
+    FastPath(Proposal),
+}
 
 #[derive(Debug, Clone)]
-pub struct Data<T: Entry> {
+struct Proposals(HashMap<NodeId, Proposal>);
+
+impl Proposals {
+    pub(crate) fn new(num_nodes: usize) -> Self {
+        Proposals(HashMap::with_capacity(num_nodes))
+    }
+
+    pub(crate) fn add_proposal(&mut self, p: Proposal, from: NodeId) {
+        self.0.insert(from, p);
+    }
+
+    pub fn check_result<T: Entry>(&self, quorum: usize, super_quorum: usize) -> ProposalResult {
+        let num_votes = self.0.len();
+
+        if num_votes < quorum {
+            return ProposalResult::NotEnoughVotes;
+        }
+
+        let mut counts: HashMap<Proposal, usize> = HashMap::new();
+        for proposal in self.0.values() {
+            *counts.entry(*proposal).or_insert(0) += 1;
+        }
+
+        // Find the proposal with the most votes
+        // If there's a tie, the Ord implementation of Proposal acts as a tie-breaker
+        let (most_common_proposal, &max_count) = counts
+            .iter()
+            .max_by(|(p1, count1), (p2, count2)| count1.cmp(count2).then_with(|| p1.cmp(p2)))
+            .unwrap();
+
+        // Non-uniform votes -> Slow path
+        if max_count < num_votes {
+            return ProposalResult::SlowPath(*most_common_proposal);
+        }
+
+        // Super-quorum -> Fast Path with the uniformly voted proposal
+        if num_votes >= super_quorum {
+            return ProposalResult::FastPath(*most_common_proposal);
+        }
+
+        // Super-quorum can still be reached
+        ProposalResult::Pending
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct Data<T: Entry> {
     pub(crate) data: Option<T>,
     pub(crate) status: DataStatus,
 }
 
 #[derive(Debug, Clone)]
-pub enum DataStatus {
+pub(crate) enum DataStatus {
     Acked,
     ReplicateAcks(PossibleFastSlots),
     SlowPathWithSlot(SlotIdx),
@@ -56,7 +109,7 @@ impl<T: Entry> ReplicatedData<T> {
     pub fn complete_and_take_decided_data(&mut self, data_id: &DataId) -> Option<T> {
         match self.0.get_mut(data_id) {
             Some(Data { data, status }) => match status {
-                DataStatus::DecidedWithSlot(slot) => {
+                DataStatus::DecidedWithSlot(_) => {
                     let d = std::mem::take(data).expect("Data not found");
                     *status = DataStatus::Completed;
                     return Some(d);
@@ -249,15 +302,6 @@ impl PossibleFastSlots {
     pub fn get_num_votes(&self) -> usize {
         self.0.values().sum()
     }
-
-    pub fn testvote_would_be_fast(&self, super_quorum_size: usize) -> bool {
-        if self.0.len() == 1 {
-            let total: usize = self.0.values().sum();
-            total == super_quorum_size
-        } else {
-            false
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -265,11 +309,4 @@ pub struct SlotEntries<T> {
     pub(crate) gaps: Vec<SlotIdx>,
     pub(crate) completed_entries: Vec<T>,
     pub(crate) completed_idx: SlotIdx,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum ProposalResult {
-    Pending,
-    FastPath(Proposal),
-    SlowPath(HashSet<Proposal>),
 }

@@ -1,5 +1,5 @@
 use omnipaxos::{
-    storage::{Entry, StopSign, Storage, StorageOp, StorageResult},
+    storage::{Entry, Storage, StorageOp, StorageResult},
     utils::Ballot,
 };
 /// An in-memory storage implementation for SequencePaxos.
@@ -16,14 +16,6 @@ where
     acc_round: Option<Ballot>,
     /// Length of the decided log.
     ld: usize,
-    /// Garbage collected index.
-    trimmed_idx: usize,
-    /// Stored compact index
-    compacted_idx: usize,
-    /// Stored snapshot
-    snapshot: Option<T::Snapshot>,
-    /// Stored StopSign
-    stopsign: Option<StopSign>,
 }
 
 impl<T> Storage<T> for MemoryStorage<T>
@@ -41,10 +33,6 @@ where
                 StorageOp::SetPromise(bal) => self.set_promise(bal)?,
                 StorageOp::SetDecidedIndex(idx) => self.set_decided_idx(idx)?,
                 StorageOp::SetAcceptedRound(bal) => self.set_accepted_round(bal)?,
-                StorageOp::SetCompactedIdx(idx) => self.set_compacted_idx(idx)?,
-                StorageOp::Trim(idx) => self.trim(idx)?,
-                StorageOp::SetStopsign(ss) => self.set_stopsign(ss)?,
-                StorageOp::SetSnapshot(snap) => self.set_snapshot(snap)?,
             }
         }
         Ok(())
@@ -62,7 +50,7 @@ where
     }
 
     fn append_on_prefix(&mut self, from_idx: usize, entries: Vec<T>) -> StorageResult<()> {
-        self.log.truncate(from_idx - self.trimmed_idx);
+        self.log.truncate(from_idx);
         self.append_entries(entries)
     }
 
@@ -90,8 +78,6 @@ where
     }
 
     fn get_entries(&self, from: usize, to: usize) -> StorageResult<Vec<T>> {
-        let from = from - self.trimmed_idx;
-        let to = to - self.trimmed_idx;
         Ok(self.log.get(from..to).unwrap_or(&[]).to_vec())
     }
 
@@ -100,7 +86,7 @@ where
     }
 
     fn get_suffix(&self, from: usize) -> StorageResult<Vec<T>> {
-        Ok(match self.log.get((from - self.trimmed_idx)..) {
+        Ok(match self.log.get((from)..) {
             Some(s) => s.to_vec(),
             None => vec![],
         })
@@ -108,40 +94,6 @@ where
 
     fn get_promise(&self) -> StorageResult<Option<Ballot>> {
         Ok(self.n_prom)
-    }
-
-    fn set_stopsign(&mut self, s: Option<StopSign>) -> StorageResult<()> {
-        self.stopsign = s;
-        Ok(())
-    }
-
-    fn get_stopsign(&self) -> StorageResult<Option<StopSign>> {
-        Ok(self.stopsign.clone())
-    }
-
-    fn trim(&mut self, trimmed_idx: usize) -> StorageResult<()> {
-        let to_trim = (trimmed_idx - self.trimmed_idx).min(self.log.len());
-        self.log.drain(0..to_trim);
-        self.trimmed_idx = trimmed_idx;
-        Ok(())
-    }
-
-    fn set_compacted_idx(&mut self, compact_idx: usize) -> StorageResult<()> {
-        self.compacted_idx = compact_idx;
-        Ok(())
-    }
-
-    fn get_compacted_idx(&self) -> StorageResult<usize> {
-        Ok(self.compacted_idx)
-    }
-
-    fn set_snapshot(&mut self, snapshot: Option<T::Snapshot>) -> StorageResult<()> {
-        self.snapshot = snapshot;
-        Ok(())
-    }
-
-    fn get_snapshot(&self) -> StorageResult<Option<T::Snapshot>> {
-        Ok(self.snapshot.clone())
     }
 }
 
@@ -152,10 +104,6 @@ impl<T: Entry> Default for MemoryStorage<T> {
             n_prom: None,
             acc_round: None,
             ld: 0,
-            trimmed_idx: 0,
-            compacted_idx: 0,
-            snapshot: None,
-            stopsign: None,
         }
     }
 }

@@ -4,10 +4,9 @@ use crate::{
     messages::Message,
     predictor::ConformalModePredictor,
     sequence_paxos::SequencePaxos,
-    storage::{Entry, StopSign, Storage},
+    storage::{Entry, Storage},
     utils::{
         defaults::{BUFFER_SIZE, ELECTION_TIMEOUT, FLUSH_BATCH_TIMEOUT, RESEND_MESSAGE_TIMEOUT},
-        ui::{self, ClusterState},
         Ballot, ConfigurationId, FlexibleQuorum, LogEntry, LogicalClock, NodeId, Phase,
     },
 };
@@ -240,33 +239,9 @@ where
     T: Entry,
     B: Storage<T>,
 {
-    /// Initiates the trim process.
-    /// # Arguments
-    /// * `trim_index` - Deletes all entries up to [`trim_index`], if the [`trim_index`] is `None` then the minimum index accepted by **ALL** servers will be used as the [`trim_index`].
-    pub fn trim(&mut self, trim_index: Option<usize>) -> Result<(), CompactionErr> {
-        self.seq_paxos.trim(trim_index)
-    }
-
-    /// Trim the log and create a snapshot. ** Note: only up to the `decided_idx` can be snapshotted **
-    /// # Arguments
-    /// `compact_idx` - Snapshots all entries < [`compact_idx`], if the [`compact_idx`] is None then the decided index will be used.
-    /// `local_only` - If `true`, only this server snapshots the log. If `false` all servers performs the snapshot.
-    pub fn snapshot(
-        &mut self,
-        compact_idx: Option<usize>,
-        local_only: bool,
-    ) -> Result<(), CompactionErr> {
-        self.seq_paxos.snapshot(compact_idx, local_only)
-    }
-
     /// Return the decided index. 0 means that no entry has been decided.
     pub fn get_decided_idx(&self) -> usize {
         self.seq_paxos.internal_storage.get_decided_idx()
-    }
-
-    /// Return trim index from storage.
-    pub fn get_compacted_idx(&self) -> usize {
-        self.seq_paxos.internal_storage.get_compacted_idx()
     }
 
     /// Returns the ID of the current leader and whether the node's `Phase` is `Phase::Accepted`.
@@ -339,33 +314,10 @@ where
         }
     }
 
-    /// Returns whether this Sequence Paxos has been reconfigured
-    pub fn is_reconfigured(&self) -> Option<StopSign> {
-        self.seq_paxos.is_reconfigured()
-    }
-
     /// Append an entry to the replicated log.
-    pub fn append(&mut self, entry: T) -> Result<(), ProposeErr<T>> {
+    pub fn append(&mut self, entry: T) {
+        self.seq_paxos.mode = self.mode_predictor.get_new_mode();
         self.seq_paxos.append(entry)
-    }
-
-    /// Propose a cluster reconfiguration. Returns an error if the current configuration has already been stopped
-    /// by a previous reconfiguration request or if the `new_configuration` is invalid.
-    /// `new_configuration` defines the cluster-wide configuration settings for the **next** cluster.
-    /// `metadata` is optional data to commit alongside the reconfiguration.
-    pub fn reconfigure(
-        &mut self,
-        new_configuration: ClusterConfig,
-        metadata: Option<Vec<u8>>,
-    ) -> Result<(), ProposeErr<T>> {
-        if let Err(config_error) = new_configuration.validate() {
-            return Err(ProposeErr::ConfigError(
-                config_error,
-                new_configuration,
-                metadata,
-            ));
-        }
-        self.seq_paxos.reconfigure(new_configuration, metadata)
     }
 
     /// Handles re-establishing a connection to a previously disconnected peer.
@@ -417,37 +369,6 @@ where
             self.seq_paxos.handle_leader(new_leader);
         }
     }
-
-    /// Returns the current states of the OmniPaxos instance for OmniPaxos UI to display.
-    pub fn get_ui_states(&self) -> ui::OmniPaxosStates {
-        let mut cluster_state = ClusterState::from(self.seq_paxos.get_leader_state());
-        cluster_state.heartbeats = self.ble.get_ballots();
-
-        ui::OmniPaxosStates {
-            current_ballot: self.ble.get_current_ballot(),
-            current_leader: self.get_current_leader().map(|(leader, _)| leader),
-            decided_idx: self.get_decided_idx(),
-            heartbeats: self.ble.get_ballots(),
-            cluster_state,
-        }
-    }
-}
-
-/// An error indicating a failed proposal due to the current cluster configuration being already stopped
-/// or due to an invalid proposed configuration. Returns the failed proposal.
-#[derive(Debug)]
-pub enum ProposeErr<T>
-where
-    T: Entry,
-{
-    /// Couldn't propose entry because a reconfiguration is pending. Returns the failed, proposed entry.
-    PendingReconfigEntry(T),
-    /// Couldn't propose reconfiguration because a reconfiguration is already pending. Returns the failed, proposed `ClusterConfig` and the metadata.
-    /// cluster config and metadata.
-    PendingReconfigConfig(ClusterConfig, Option<Vec<u8>>),
-    /// Couldn't propose reconfiguration because of an invalid cluster config. Contains the config
-    /// error and the failed, proposed cluster config and metadata.
-    ConfigError(ConfigError, ClusterConfig, Option<Vec<u8>>),
 }
 
 /// An error returning the proposal that was failed due to that the current configuration is stopped.

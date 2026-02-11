@@ -32,7 +32,7 @@ fn batching_test() {
         let (kprom, kfuture) = promise::<()>();
         first_node.on_definition(|x| {
             x.insert_decided_future(Ask::new(kprom, v.clone()));
-            x.paxos.append(v.clone()).expect("Failed to append");
+            x.paxos.append(v.clone());
         });
         futures.push(kfuture);
         thread::sleep(wait_time_between_propose);

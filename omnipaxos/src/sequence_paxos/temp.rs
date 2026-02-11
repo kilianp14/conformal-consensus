@@ -1,11 +1,11 @@
 use super::{leader::LeaderState, messages::*, SequencePaxos};
 use crate::{
     storage::{Entry, Storage},
-    utils::{Mode, Phase, Role, WRITE_ERROR_MSG},
+    utils::{Ballot, Mode, NodeId, Phase, Role, WRITE_ERROR_MSG},
 };
 #[cfg(feature = "logging")]
 use slog::{trace, warn};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 impl<T, B> SequencePaxos<T, B>
 where

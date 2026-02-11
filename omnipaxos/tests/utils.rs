@@ -3,14 +3,11 @@ use kompact::{config_keys::system, executors::crossbeam_workstealing_pool, prelu
 use omnipaxos::{
     macros::*,
     messages::Message,
-    storage::{Entry, Snapshot, Storage, StorageResult},
+    storage::{Entry, Storage, StorageResult},
     utils::{Ballot, FlexibleQuorum, NodeId},
     ClusterConfig, OmniPaxosConfig, ServerConfig,
 };
-use omnipaxos_storage::{
-    memory_storage::MemoryStorage,
-    persistent_storage::{PersistentStorage, PersistentStorageConfig},
-};
+use omnipaxos_storage::memory_storage::MemoryStorage;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::{
     collections::HashMap,
@@ -27,9 +24,6 @@ const STOP_COMPONENT_TIMEOUT: Duration = Duration::from_millis(1000);
 const CHECK_DECIDED_TIMEOUT: Duration = Duration::from_millis(1);
 pub const STOPSIGN_ID: u64 = u64::MAX;
 
-#[cfg(feature = "unicache")]
-use omnipaxos::unicache::{MaybeEncoded, UniCache};
-
 /// Serde deserialize function to deserialize toml milliseconds u64s to std::time::Duration
 fn deserialize_duration_millis<'de, D>(deserializer: D) -> Result<Duration, D::Error>
 where
@@ -40,29 +34,7 @@ where
 }
 
 pub fn create_proposals(from: u64, to: u64) -> Vec<Value> {
-    #[cfg(feature = "unicache")]
-    {
-        (from..=to)
-            .map(|id| {
-                let mut v = Value::with_id(id);
-                // Different combinations of cache hit/miss in Value depending on the id
-                if id % 2 == 0 {
-                    v.first_name = "John".to_string()
-                }
-                if id % 3 == 0 {
-                    v.job = "Software Engineer".to_string();
-                }
-                if id % 5 == 0 {
-                    v.last_name = "Doe".to_string()
-                }
-                v
-            })
-            .collect()
-    }
-    #[cfg(not(feature = "unicache"))]
-    {
-        (from..=to).map(Value::with_id).collect()
-    }
+    (from..=to).map(Value::with_id).collect()
 }
 
 /// Configuration for `TestSystem`. TestConfig loads the values from
@@ -90,8 +62,6 @@ pub struct TestConfig {
     pub trim_idx: usize,
     pub flexible_quorum: Option<(usize, usize)>,
     pub batch_size: usize,
-    // #[cfg(feature = "unicache")]
-    pub num_iterations: u64,
 }
 
 impl TestConfig {
@@ -151,7 +121,6 @@ impl Default for TestConfig {
             trim_idx: 0,
             flexible_quorum: None,
             batch_size: 1,
-            num_iterations: 0,
         }
     }
 }
@@ -160,7 +129,6 @@ impl Default for TestConfig {
 #[derive(Clone, Copy, Deserialize)]
 #[serde(tag = "type")]
 pub enum StorageTypeSelector {
-    Persistent,
     Memory,
     Broken(BrokenStorageConfig),
 }
@@ -203,7 +171,6 @@ pub enum StorageType<T>
 where
     T: Entry,
 {
-    Persistent(PersistentStorage<T>),
     Memory(MemoryStorage<T>),
     /// Mocks a storage that fails depending of the config.
     /// Arc<Mutex<_>> is needed since we need to mutate conf through immutable references.
@@ -216,14 +183,9 @@ where
 impl<T> StorageType<T>
 where
     T: Entry + Serialize + for<'a> Deserialize<'a>,
-    T::Snapshot: Serialize + for<'a> Deserialize<'a>,
 {
-    pub fn with(storage_type: StorageTypeSelector, my_path: &str) -> Self {
+    pub fn with(storage_type: StorageTypeSelector) -> Self {
         match storage_type {
-            StorageTypeSelector::Persistent => {
-                let persist_conf = PersistentStorageConfig::with_path(my_path.to_string());
-                StorageType::Persistent(PersistentStorage::open(persist_conf))
-            }
             StorageTypeSelector::Memory => StorageType::Memory(MemoryStorage::default()),
             StorageTypeSelector::Broken(config) => StorageType::Broken(
                 Arc::new(Mutex::new(MemoryStorage::default())),
@@ -240,14 +202,12 @@ where
 impl<T> Storage<T> for StorageType<T>
 where
     T: Entry + Serialize + for<'a> Deserialize<'a>,
-    T::Snapshot: Serialize + for<'a> Deserialize<'a>,
 {
     fn write_atomically(
         &mut self,
         ops: Vec<omnipaxos::storage::StorageOp<T>>,
     ) -> StorageResult<()> {
         match self {
-            StorageType::Persistent(persist_s) => persist_s.write_atomically(ops),
             StorageType::Memory(mem_s) => mem_s.write_atomically(ops),
             StorageType::Broken(mem_s, conf) => {
                 // NOTE: Can't properly test for atomicity since we can't tick between writes in batch.
@@ -259,7 +219,6 @@ where
 
     fn append_entry(&mut self, entry: T) -> StorageResult<()> {
         match self {
-            StorageType::Persistent(persist_s) => persist_s.append_entry(entry),
             StorageType::Memory(mem_s) => mem_s.append_entry(entry),
             StorageType::Broken(mem_s, conf) => {
                 conf.lock().unwrap().tick()?;
@@ -270,7 +229,6 @@ where
 
     fn append_entries(&mut self, entries: Vec<T>) -> StorageResult<()> {
         match self {
-            StorageType::Persistent(persist_s) => persist_s.append_entries(entries),
             StorageType::Memory(mem_s) => mem_s.append_entries(entries),
             StorageType::Broken(mem_s, conf) => {
                 conf.lock().unwrap().tick()?;
@@ -281,7 +239,6 @@ where
 
     fn append_on_prefix(&mut self, from_idx: usize, entries: Vec<T>) -> StorageResult<()> {
         match self {
-            StorageType::Persistent(persist_s) => persist_s.append_on_prefix(from_idx, entries),
             StorageType::Memory(mem_s) => mem_s.append_on_prefix(from_idx, entries),
             StorageType::Broken(mem_s, conf) => {
                 conf.lock().unwrap().tick()?;
@@ -292,7 +249,6 @@ where
 
     fn set_promise(&mut self, n_prom: Ballot) -> StorageResult<()> {
         match self {
-            StorageType::Persistent(persist_s) => persist_s.set_promise(n_prom),
             StorageType::Memory(mem_s) => mem_s.set_promise(n_prom),
             StorageType::Broken(mem_s, conf) => {
                 conf.lock().unwrap().tick()?;
@@ -303,7 +259,6 @@ where
 
     fn set_decided_idx(&mut self, ld: usize) -> StorageResult<()> {
         match self {
-            StorageType::Persistent(persist_s) => persist_s.set_decided_idx(ld),
             StorageType::Memory(mem_s) => mem_s.set_decided_idx(ld),
             StorageType::Broken(mem_s, conf) => {
                 conf.lock().unwrap().tick()?;
@@ -314,7 +269,6 @@ where
 
     fn get_decided_idx(&self) -> StorageResult<usize> {
         match self {
-            StorageType::Persistent(persist_s) => persist_s.get_decided_idx(),
             StorageType::Memory(mem_s) => mem_s.get_decided_idx(),
             StorageType::Broken(mem_s, conf) => {
                 conf.lock().unwrap().tick()?;
@@ -325,7 +279,6 @@ where
 
     fn set_accepted_round(&mut self, na: Ballot) -> StorageResult<()> {
         match self {
-            StorageType::Persistent(persist_s) => persist_s.set_accepted_round(na),
             StorageType::Memory(mem_s) => mem_s.set_accepted_round(na),
             StorageType::Broken(mem_s, conf) => {
                 conf.lock().unwrap().tick()?;
@@ -336,7 +289,6 @@ where
 
     fn get_accepted_round(&self) -> StorageResult<Option<Ballot>> {
         match self {
-            StorageType::Persistent(persist_s) => persist_s.get_accepted_round(),
             StorageType::Memory(mem_s) => mem_s.get_accepted_round(),
             StorageType::Broken(mem_s, conf) => {
                 conf.lock().unwrap().tick()?;
@@ -347,7 +299,6 @@ where
 
     fn get_entries(&self, from: usize, to: usize) -> StorageResult<Vec<T>> {
         match self {
-            StorageType::Persistent(persist_s) => persist_s.get_entries(from, to),
             StorageType::Memory(mem_s) => mem_s.get_entries(from, to),
             StorageType::Broken(mem_s, conf) => {
                 conf.lock().unwrap().tick()?;
@@ -358,7 +309,6 @@ where
 
     fn get_log_len(&self) -> StorageResult<usize> {
         match self {
-            StorageType::Persistent(persist_s) => persist_s.get_log_len(),
             StorageType::Memory(mem_s) => mem_s.get_log_len(),
             StorageType::Broken(mem_s, conf) => {
                 conf.lock().unwrap().tick()?;
@@ -369,7 +319,6 @@ where
 
     fn get_suffix(&self, from: usize) -> StorageResult<Vec<T>> {
         match self {
-            StorageType::Persistent(persist_s) => persist_s.get_suffix(from),
             StorageType::Memory(mem_s) => mem_s.get_suffix(from),
             StorageType::Broken(mem_s, conf) => {
                 conf.lock().unwrap().tick()?;
@@ -380,88 +329,10 @@ where
 
     fn get_promise(&self) -> StorageResult<Option<Ballot>> {
         match self {
-            StorageType::Persistent(persist_s) => persist_s.get_promise(),
             StorageType::Memory(mem_s) => mem_s.get_promise(),
             StorageType::Broken(mem_s, conf) => {
                 conf.lock().unwrap().tick()?;
                 mem_s.lock().unwrap().get_promise()
-            }
-        }
-    }
-
-    fn set_stopsign(&mut self, s: Option<omnipaxos::storage::StopSign>) -> StorageResult<()> {
-        match self {
-            StorageType::Persistent(persist_s) => persist_s.set_stopsign(s),
-            StorageType::Memory(mem_s) => mem_s.set_stopsign(s),
-            StorageType::Broken(mem_s, conf) => {
-                conf.lock().unwrap().tick()?;
-                mem_s.lock().unwrap().set_stopsign(s)
-            }
-        }
-    }
-
-    fn get_stopsign(&self) -> StorageResult<Option<omnipaxos::storage::StopSign>> {
-        match self {
-            StorageType::Persistent(persist_s) => persist_s.get_stopsign(),
-            StorageType::Memory(mem_s) => mem_s.get_stopsign(),
-            StorageType::Broken(mem_s, conf) => {
-                conf.lock().unwrap().tick()?;
-                mem_s.lock().unwrap().get_stopsign()
-            }
-        }
-    }
-
-    fn trim(&mut self, idx: usize) -> StorageResult<()> {
-        match self {
-            StorageType::Persistent(persist_s) => persist_s.trim(idx),
-            StorageType::Memory(mem_s) => mem_s.trim(idx),
-            StorageType::Broken(mem_s, conf) => {
-                conf.lock().unwrap().tick()?;
-                mem_s.lock().unwrap().trim(idx)
-            }
-        }
-    }
-
-    fn set_compacted_idx(&mut self, idx: usize) -> StorageResult<()> {
-        match self {
-            StorageType::Persistent(persist_s) => persist_s.set_compacted_idx(idx),
-            StorageType::Memory(mem_s) => mem_s.set_compacted_idx(idx),
-            StorageType::Broken(mem_s, conf) => {
-                conf.lock().unwrap().tick()?;
-                mem_s.lock().unwrap().set_compacted_idx(idx)
-            }
-        }
-    }
-
-    fn get_compacted_idx(&self) -> StorageResult<usize> {
-        match self {
-            StorageType::Persistent(persist_s) => persist_s.get_compacted_idx(),
-            StorageType::Memory(mem_s) => mem_s.get_compacted_idx(),
-            StorageType::Broken(mem_s, conf) => {
-                conf.lock().unwrap().tick()?;
-                mem_s.lock().unwrap().get_compacted_idx()
-            }
-        }
-    }
-
-    fn set_snapshot(&mut self, snapshot: Option<T::Snapshot>) -> StorageResult<()> {
-        match self {
-            StorageType::Persistent(persist_s) => persist_s.set_snapshot(snapshot),
-            StorageType::Memory(mem_s) => mem_s.set_snapshot(snapshot),
-            StorageType::Broken(mem_s, conf) => {
-                conf.lock().unwrap().tick()?;
-                mem_s.lock().unwrap().set_snapshot(snapshot)
-            }
-        }
-    }
-
-    fn get_snapshot(&self) -> StorageResult<Option<T::Snapshot>> {
-        match self {
-            StorageType::Persistent(persist_s) => persist_s.get_snapshot(),
-            StorageType::Memory(mem_s) => mem_s.get_snapshot(),
-            StorageType::Broken(mem_s, conf) => {
-                conf.lock().unwrap().tick()?;
-                mem_s.lock().unwrap().get_snapshot()
             }
         }
     }
@@ -493,8 +364,7 @@ impl TestSystem {
 
         for pid in 1..=test_config.num_nodes as NodeId {
             let op_config = test_config.into_omnipaxos_config(pid);
-            let storage: StorageType<Value> =
-                StorageType::with(test_config.storage_type, &format!("{temp_dir_path}{pid}"));
+            let storage: StorageType<Value> = StorageType::with(test_config.storage_type);
             let (omni_replica, omni_reg_f) = system.create_and_register(|| {
                 OmniPaxosComponent::with(
                     pid,
@@ -689,7 +559,7 @@ impl TestSystem {
         proposer.on_definition(|x| {
             for v in proposals {
                 let (kprom, kfuture) = promise::<()>();
-                x.paxos.append(v.clone()).expect("Failed to append");
+                x.paxos.append(v.clone());
                 x.insert_decided_future(Ask::new(kprom, v));
                 proposal_futures.push(kfuture);
             }
@@ -699,32 +569,6 @@ impl TestSystem {
             Ok(_) => {}
             Err(e) => panic!("Error on collecting futures of decided proposals: {}", e),
         }
-    }
-
-    pub fn reconfigure(
-        &self,
-        proposer: NodeId,
-        new_configuration: ClusterConfig,
-        metadata: Option<Vec<u8>>,
-        timeout: Duration,
-    ) {
-        let proposer = self
-            .nodes
-            .get(&proposer)
-            .expect("No SequencePaxos component found");
-
-        let reconfig_future = proposer.on_definition(|x| {
-            let (kprom, kfuture) = promise::<()>();
-            x.paxos
-                .reconfigure(new_configuration, metadata)
-                .expect("Failed to reconfigure");
-            x.insert_decided_future(Ask::new(kprom, Value::with_id(STOPSIGN_ID)));
-            kfuture
-        });
-
-        reconfig_future
-            .wait_timeout(timeout)
-            .expect("Failed to collect reconfiguration future");
     }
 
     fn set_executor_for_threads(threads: usize, conf: &mut KompactConfig) {
@@ -880,15 +724,6 @@ pub mod omnireplica {
                         LogEntry::Decided(i) => {
                             self.try_answer_decided_future(i.id);
                         }
-                        LogEntry::Snapshotted(s) => {
-                            // Reply futures that were trimmed away
-                            for id in s.snapshot.snapshotted.iter().map(|x| x.id) {
-                                self.try_answer_decided_future(id)
-                            }
-                        }
-                        LogEntry::StopSign(_ss, _is_decided) => {
-                            self.try_answer_decided_future(STOPSIGN_ID);
-                        }
                         err => panic!("{}", format!("Got unexpected entry: {:?}", err)),
                     }
                 }
@@ -911,81 +746,16 @@ pub mod omnireplica {
     }
 }
 
-#[cfg(not(feature = "unicache"))]
 #[derive(Entry, Clone, Default, PartialOrd, PartialEq, Serialize, Deserialize, Eq, Hash, Debug)]
-#[snapshot(ValueSnapshot)]
-pub struct Value {
-    id: u64,
-}
-
-#[cfg(feature = "unicache")]
-#[derive(
-    Clone, Default, PartialOrd, PartialEq, Serialize, Deserialize, Eq, Hash, UniCacheEntry, Debug,
-)]
-#[snapshot(ValueSnapshot)]
 pub struct Value {
     pub id: u64,
-    #[unicache(encoding(u8), size(100))]
-    first_name: String,
-    #[unicache(encoding(u32))]
-    last_name: String,
-    #[unicache(size(20), cache(lfu), encoding(u64))]
-    job: String,
 }
 
 impl Value {
     pub fn with_id(id: u64) -> Self {
-        Self {
-            id,
-            #[cfg(feature = "unicache")]
-            first_name: id.to_string(),
-            #[cfg(feature = "unicache")]
-            last_name: id.to_string(),
-            #[cfg(feature = "unicache")]
-            job: id.to_string(),
-        }
+        Self { id }
     }
 }
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct ValueSnapshot {
-    pub latest_value: Value,
-    pub snapshotted: Vec<Value>,
-}
-
-impl Snapshot<Value> for ValueSnapshot {
-    fn create(entries: &[Value]) -> Self {
-        Self {
-            latest_value: entries.last().cloned().unwrap_or_default(),
-            snapshotted: entries.to_vec(),
-        }
-    }
-
-    fn merge(&mut self, delta: Self) {
-        if !delta.snapshotted.is_empty() {
-            self.latest_value = delta.snapshotted.last().unwrap().clone();
-            self.snapshotted.extend(delta.snapshotted);
-        }
-    }
-
-    fn use_snapshots() -> bool {
-        true
-    }
-}
-
-impl ValueSnapshot {
-    pub fn contains_id(&self, id: &u64) -> bool {
-        self.snapshotted.iter().any(|x| &x.id == id)
-    }
-}
-
-impl PartialEq<Self> for ValueSnapshot {
-    fn eq(&self, other: &Self) -> bool {
-        self.latest_value == other.latest_value
-    }
-}
-
-impl Eq for ValueSnapshot {}
 
 /// Create a temporary directory in /tmp/
 pub fn create_temp_dir() -> String {
@@ -995,64 +765,21 @@ pub fn create_temp_dir() -> String {
 }
 
 pub mod verification {
-    use super::{Value, ValueSnapshot};
-    use omnipaxos::{
-        storage::{Snapshot, StopSign},
-        utils::{LogEntry, NodeId},
-    };
+    use super::Value;
+    use omnipaxos::utils::{LogEntry, NodeId};
 
-    /// Verify that the log matches the proposed values, Depending on
-    /// the timing the log should match one of the following cases.
+    /// Verify that the log matches the proposed values
     /// * All entries are decided, verify the decided entries
-    /// * Only a snapshot was taken, verify the snapshot
-    /// * A snapshot was taken and entries decided on afterwards, verify both the snapshot and entries
     pub fn verify_log(read_log: Vec<LogEntry<Value>>, proposals: Vec<Value>) {
         let num_proposals = proposals.len();
         match &read_log[..] {
             [LogEntry::Decided(_), ..] => verify_entries(&read_log, &proposals, 0, num_proposals),
-            [LogEntry::Snapshotted(s)] => {
-                let exp_snapshot = ValueSnapshot::create(proposals.as_slice());
-                verify_snapshot(&read_log, s.trimmed_idx, &exp_snapshot);
-            }
-            [LogEntry::Snapshotted(s), LogEntry::Decided(_), ..] => {
-                let (snapshotted_proposals, last_proposals) = proposals.split_at(s.trimmed_idx);
-                let (snapshot_entry, decided_entries) = read_log.split_at(1); // separate the snapshot from the decided entries
-                let exp_snapshot = ValueSnapshot::create(snapshotted_proposals);
-                verify_snapshot(snapshot_entry, s.trimmed_idx, &exp_snapshot);
-                verify_entries(decided_entries, last_proposals, 0, num_proposals);
-            }
             [] => assert!(
                 proposals.is_empty(),
                 "Log is empty but should be {:?}",
                 proposals
             ),
             _ => panic!("Unexpected entries in the log: {:?} ", read_log),
-        }
-    }
-
-    /// Verify that the log has a single snapshot of the latest entry.
-    pub fn verify_snapshot(
-        read_entries: &[LogEntry<Value>],
-        exp_compacted_idx: usize,
-        exp_snapshot: &ValueSnapshot,
-    ) {
-        assert_eq!(
-            read_entries.len(),
-            1,
-            "Expected snapshot, got: {:?}",
-            read_entries
-        );
-        match read_entries
-            .first()
-            .expect("Expected entry from first element")
-        {
-            LogEntry::Snapshotted(s) => {
-                assert_eq!(s.trimmed_idx, exp_compacted_idx);
-                assert_eq!(&s.snapshot, exp_snapshot);
-            }
-            e => {
-                panic!("{}", format!("Not a snapshot: {:?}", e));
-            }
         }
     }
 
@@ -1084,24 +811,6 @@ pub mod verification {
                         idx, e, decided_idx
                     )
                 ),
-            }
-        }
-    }
-
-    /// Verify that the log entry contains only a stopsign matching `exp_stopsign`
-    pub fn verify_stopsign(read_entries: &[LogEntry<Value>], exp_stopsign: &StopSign) {
-        assert_eq!(
-            read_entries.len(),
-            1,
-            "Expected StopSign, read: {:?}",
-            read_entries
-        );
-        match read_entries.first().unwrap() {
-            LogEntry::StopSign(ss, _is_decided) => {
-                assert_eq!(ss, exp_stopsign);
-            }
-            e => {
-                panic!("{}", format!("Not a StopSign: {:?}", e))
             }
         }
     }
@@ -1143,7 +852,7 @@ pub mod verification {
         });
     }
 
-    /// Verifies logs do not diverge. **NOTE**: this check assumes normal execution within one round without any snapshots, trimming.
+    /// Verifies logs do not diverge. **NOTE**: this check assumes normal execution within one round
     pub fn check_consistent_log_prefixes(logs: &Vec<(NodeId, Vec<LogEntry<Value>>)>) {
         let (_, longest_log) = logs
             .iter()

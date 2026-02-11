@@ -6,7 +6,6 @@ OmniPaxos
 [![Documentation](https://docs.rs/omnipaxos/badge.svg)](https://docs.rs/omnipaxos)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/haraldng/omnipaxos)
 
-![overview](overview.png)
 
 OmniPaxos is an in-development replicated log library implemented in Rust. OmniPaxos aims to hide the complexities of consensus to provide users a replicated log that is as simple to use as a local log.
 

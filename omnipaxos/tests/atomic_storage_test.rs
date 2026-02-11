@@ -13,17 +13,12 @@
 pub mod utils;
 
 use crate::utils::StorageType;
-#[cfg(not(feature = "unicache"))]
-use omnipaxos::sequence_paxos::messages::{AcceptDecide, Compaction};
-#[cfg(feature = "unicache")]
-use omnipaxos::storage::Entry;
-#[cfg(feature = "unicache")]
-use omnipaxos::unicache::UniCache;
+use omnipaxos::sequence_paxos::messages::SlowAccept;
 use omnipaxos::{
     leader_election::messages::{BLEMessage, HeartbeatMsg, HeartbeatReply},
     messages::Message,
     sequence_paxos::messages::{AcceptSync, PaxosMessage, PaxosMsg, Prepare, Promise},
-    storage::{Snapshot, SnapshotType, Storage},
+    storage::Storage,
     utils::{LogSync, NodeId, SequenceNumber},
     OmniPaxos, OmniPaxosConfig,
 };
@@ -33,7 +28,7 @@ use std::{
     panic::{catch_unwind, AssertUnwindSafe},
     sync::{Arc, Mutex},
 };
-use utils::{BrokenStorageConfig, TestConfig, Value, ValueSnapshot};
+use utils::{BrokenStorageConfig, TestConfig, Value};
 
 type MemoryStore = Arc<Mutex<MemoryStorage<Value>>>;
 type BrokenStore = Arc<Mutex<BrokenStorageConfig>>;
@@ -47,7 +42,7 @@ fn basic_setup() -> (
     OmniPaxos<Value, StorageType<Value>>,
 ) {
     let cfg = TestConfig::load("atomic_storage_test").expect("Test config loaded");
-    let storage = StorageType::with(cfg.storage_type, "");
+    let storage = StorageType::with(cfg.storage_type);
     let (mem_storage, storage_conf) = if let StorageType::Broken(ref s, ref c) = storage {
         (s.clone(), c.clone())
     } else {
@@ -180,13 +175,9 @@ fn setup_follower() -> (
             seq_num: seq,
             decided_idx: 0,
             log_sync: LogSync {
-                decided_snapshot: None,
                 suffix: vec![],
                 sync_idx: 0,
-                stopsign: None,
             },
-            #[cfg(feature = "unicache")]
-            unicache: <Value as Entry>::UniCache::new(),
         }),
     });
     op.handle_incoming(setup_msg);
@@ -237,13 +228,9 @@ fn atomic_storage_acceptsync_test() {
                 seq_num: seq,
                 decided_idx: 1,
                 log_sync: LogSync {
-                    decided_snapshot: None,
                     suffix: vec![Value::with_id(1), Value::with_id(2), Value::with_id(3)],
                     sync_idx: 0,
-                    stopsign: None,
                 },
-                #[cfg(feature = "unicache")]
-                unicache: <Value as Entry>::UniCache::new(),
             }),
         });
         let _res = catch_unwind(AssertUnwindSafe(|| op.handle_incoming(msg.clone())));
@@ -264,141 +251,6 @@ fn atomic_storage_acceptsync_test() {
     }
 }
 
-#[cfg(not(feature = "unicache"))]
-#[test]
-#[serial]
-fn atomic_storage_trim_test() {
-    fn run_single_test(fail_after_n_ops: usize) {
-        let (mem_storage, storage_conf, mut op) = setup_follower();
-
-        let setup_msg = Message::<Value>::SequencePaxos(PaxosMessage {
-            from: 2,
-            to: 1,
-            msg: PaxosMsg::AcceptDecide(AcceptDecide {
-                n: mem_storage.lock().unwrap().get_promise().unwrap().unwrap(),
-                seq_num: SequenceNumber {
-                    session: 1,
-                    counter: 2,
-                },
-                decided_idx: 5,
-                entries: vec![
-                    Value::with_id(1),
-                    Value::with_id(2),
-                    Value::with_id(3),
-                    Value::with_id(4),
-                    Value::with_id(5),
-                    Value::with_id(6),
-                ],
-            }),
-        });
-        op.handle_incoming(setup_msg);
-
-        let old_compacted_idx = mem_storage.lock().unwrap().get_compacted_idx().unwrap();
-        let old_log_len = mem_storage.lock().unwrap().get_log_len().unwrap();
-        storage_conf
-            .lock()
-            .unwrap()
-            .schedule_failure_in(fail_after_n_ops);
-
-        // Test handle Trim
-        let msg = Message::<Value>::SequencePaxos(PaxosMessage {
-            from: 2,
-            to: 1,
-            msg: PaxosMsg::Compaction(Compaction::Trim(4)),
-        });
-        let _res = catch_unwind(AssertUnwindSafe(|| op.handle_incoming(msg.clone())));
-
-        // check consistency
-        let s = mem_storage.lock().unwrap();
-        let new_compacted_idx = s.get_compacted_idx().unwrap();
-        let new_log_len = s.get_log_len().unwrap();
-        assert!(
-            (new_log_len == old_log_len && new_compacted_idx == old_compacted_idx)
-                || (new_log_len < old_log_len && new_compacted_idx > old_compacted_idx),
-            "compacted_idx and log_len only change together"
-        );
-        assert!(
-            new_log_len + new_compacted_idx == old_log_len + old_compacted_idx,
-            "real log len should not change"
-        );
-    }
-    // run the test with injected failures at different points in time
-    for i in 1..10 {
-        run_single_test(i);
-    }
-}
-
-#[cfg(not(feature = "unicache"))]
-#[test]
-#[serial]
-fn atomic_storage_snapshot_test() {
-    fn run_single_test(fail_after_n_ops: usize) {
-        let (mem_storage, storage_conf, mut op) = setup_follower();
-
-        let setup_msg = Message::<Value>::SequencePaxos(PaxosMessage {
-            from: 2,
-            to: 1,
-            msg: PaxosMsg::AcceptDecide(AcceptDecide {
-                n: mem_storage.lock().unwrap().get_promise().unwrap().unwrap(),
-                seq_num: SequenceNumber {
-                    session: 1,
-                    counter: 2,
-                },
-                decided_idx: 5,
-                entries: vec![
-                    Value::with_id(1),
-                    Value::with_id(2),
-                    Value::with_id(3),
-                    Value::with_id(4),
-                    Value::with_id(5),
-                    Value::with_id(6),
-                ],
-            }),
-        });
-        op.handle_incoming(setup_msg);
-
-        let old_compacted_idx = mem_storage.lock().unwrap().get_compacted_idx().unwrap();
-        let old_log_len = mem_storage.lock().unwrap().get_log_len().unwrap();
-        storage_conf
-            .lock()
-            .unwrap()
-            .schedule_failure_in(fail_after_n_ops);
-
-        // Test handle Snapshot
-        let msg = Message::<Value>::SequencePaxos(PaxosMessage {
-            from: 2,
-            to: 1,
-            msg: PaxosMsg::Compaction(Compaction::Snapshot(Some(4))),
-        });
-        let _res = catch_unwind(AssertUnwindSafe(|| op.handle_incoming(msg.clone())));
-
-        // check consistency
-        let s = mem_storage.lock().unwrap();
-        let new_compacted_idx = s.get_compacted_idx().unwrap();
-        let new_log_len = s.get_log_len().unwrap();
-        let new_snapshot = s.get_snapshot().unwrap();
-        assert!(
-            (new_log_len == old_log_len && new_compacted_idx == old_compacted_idx)
-                || (new_log_len < old_log_len && new_compacted_idx > old_compacted_idx),
-            "compacted_idx and log_len only change together"
-        );
-        assert!(
-            new_log_len == old_log_len
-                || (new_snapshot.is_some() && new_compacted_idx > old_compacted_idx),
-            "trim should only happen if snapshot and compacted_idx are updated successfully"
-        );
-        assert!(
-            new_log_len + new_compacted_idx == old_log_len + old_compacted_idx,
-            "real log len should not change"
-        );
-    }
-    // run the test with injected failures at different points in time
-    for i in 1..10 {
-        run_single_test(i);
-    }
-}
-
-#[cfg(not(feature = "unicache"))]
 #[test]
 #[serial]
 fn atomic_storage_accept_decide_test() {
@@ -412,11 +264,11 @@ fn atomic_storage_accept_decide_test() {
             .unwrap()
             .schedule_failure_in(fail_after_n_ops);
 
-        // Test handle AcceptDecide
+        // Test handle SlowAccept
         let msg = Message::<Value>::SequencePaxos(PaxosMessage {
             from: 2,
             to: 1,
-            msg: PaxosMsg::AcceptDecide(AcceptDecide {
+            msg: PaxosMsg::SlowAccept(SlowAccept {
                 n: mem_storage.lock().unwrap().get_promise().unwrap().unwrap(),
                 seq_num: SequenceNumber {
                     session: 1,
@@ -442,7 +294,7 @@ fn atomic_storage_accept_decide_test() {
         if new_decided_idx > old_decided_idx {
             assert!(
                 new_log_len > old_log_len,
-                "AcceptDecide operation order didn't ensure safety."
+                "SlowAccept operation order didn't ensure safety."
             );
         }
     }
@@ -531,11 +383,7 @@ fn atomic_storage_majority_promises_test() {
                 }
             }
         }
-        let old_decided_idx = mem_storage.lock().unwrap().get_decided_idx().unwrap();
-        let old_compacted_idx = mem_storage.lock().unwrap().get_compacted_idx().unwrap();
-        let old_accepted_idx =
-            mem_storage.lock().unwrap().get_log_len().unwrap() + old_compacted_idx;
-        let old_snapshot = mem_storage.lock().unwrap().get_snapshot().unwrap();
+        let old_accepted_idx = mem_storage.lock().unwrap().get_log_len().unwrap();
         storage_conf
             .lock()
             .unwrap()
@@ -550,13 +398,8 @@ fn atomic_storage_majority_promises_test() {
                 accepted_idx: 3,
                 n_accepted: n_old,
                 log_sync: Some(LogSync {
-                    decided_snapshot: Some(SnapshotType::Complete(ValueSnapshot::create(&[
-                        Value::with_id(1),
-                        Value::with_id(2),
-                    ]))),
-                    suffix: vec![Value::with_id(3)],
+                    suffix: vec![Value::with_id(1), Value::with_id(2), Value::with_id(3)],
                     sync_idx: 2,
-                    stopsign: None,
                 }),
             }),
         });
@@ -564,22 +407,11 @@ fn atomic_storage_majority_promises_test() {
 
         // check consistency
         let s = mem_storage.lock().unwrap();
-        let new_decided_idx = s.get_decided_idx().unwrap();
-        let new_accepted_idx = s.get_log_len().unwrap() + s.get_compacted_idx().unwrap();
-        let new_snapshot = s.get_snapshot().unwrap();
+        let new_accepted_idx = s.get_log_len().unwrap();
         let new_accepted_round = s.get_accepted_round().unwrap();
         assert!(
             op.get_current_leader().expect("should have leader").0 == 1,
             "should be leader"
-        );
-        assert!(
-            old_snapshot.is_none(),
-            "sanity check failed: new OP instance has a snapshot set"
-        );
-        assert!(
-            (new_decided_idx == old_decided_idx && new_snapshot.is_none())
-                || (new_decided_idx > old_decided_idx && new_snapshot.is_some()),
-            "decided_idx and decided_snapshot should be updated atomically"
         );
         assert!(
             (new_accepted_idx == old_accepted_idx && new_accepted_round == Some(n_old))
