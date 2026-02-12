@@ -20,4 +20,3 @@ quote = "1.0"
 
 [dev-dependencies]
 omnipaxos = { path = "../omnipaxos", features = ["macros"] }
-omnipaxos_storage = { path = "../omnipaxos_storage" }

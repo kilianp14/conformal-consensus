@@ -1,11 +1,13 @@
-use crate::storage::Entry;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-use std::{cmp::Ordering, fmt::Debug};
-
-/// Holds helpful functions used in creating loggers.
 #[cfg(feature = "logging")]
-pub mod logger;
+use slog::{o, Drain, Logger};
+use std::{cmp::Ordering, fmt::Debug};
+#[cfg(feature = "logging")]
+use std::{fs::OpenOptions, sync::Mutex};
+
+/// Type of the entries stored in the log.
+pub trait Entry: Clone + Debug {}
 
 /// Struct used to help another server synchronize their log with the current state of our own log.
 #[derive(Clone, Debug)]
@@ -49,22 +51,11 @@ pub(crate) mod defaults {
     pub(crate) const BLE_BUFFER_SIZE: usize = 100;
     pub(crate) const ELECTION_TIMEOUT: u64 = 1;
     pub(crate) const RESEND_MESSAGE_TIMEOUT: u64 = 100;
-    pub(crate) const FLUSH_BATCH_TIMEOUT: u64 = 200;
     pub(crate) const DEFAULT_MODE: Mode = Mode::OmniPaxos;
 }
 
-#[allow(missing_docs)]
-pub type TrimmedIndex = usize;
-
 /// ID for an OmniPaxos node
 pub type NodeId = u64;
-/// ID for an OmniPaxos configuration (i.e., the set of servers in an OmniPaxos cluster)
-pub type ConfigurationId = u32;
-
-/// Error message to display when there was an error reading to the storage implementation.
-pub const READ_ERROR_MSG: &str = "Error reading from storage.";
-/// Error message to display when there was an error writing to the storage implementation.
-pub const WRITE_ERROR_MSG: &str = "Error writing to storage.";
 
 /// Used for checking the ordering of message sequences in the accept phase
 #[derive(PartialEq, Eq)]
@@ -104,8 +95,6 @@ impl SequenceNumber {
 #[derive(Clone, Copy, Eq, Debug, Default, PartialEq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Ballot {
-    /// The identifier for the configuration that the replica with this ballot is part of.
-    pub config_id: ConfigurationId,
     /// Ballot number
     pub n: u32,
     /// Custom priority parameter
@@ -117,16 +106,10 @@ pub struct Ballot {
 impl Ballot {
     /// Creates a new Ballot
     /// # Arguments
-    /// * `config_id` - The identifier for the configuration that the replica with this ballot is part of.
     /// * `n` - Ballot number.
     /// * `pid` -  Used as tiebreaker for total ordering of ballots.
-    pub fn with(config_id: ConfigurationId, n: u32, priority: u32, pid: NodeId) -> Ballot {
-        Ballot {
-            config_id,
-            n,
-            priority,
-            pid,
-        }
+    pub fn with(n: u32, priority: u32, pid: NodeId) -> Ballot {
+        Ballot { n, priority, pid }
     }
 }
 
@@ -268,8 +251,27 @@ impl PartialEq for PromiseMetaData {
     }
 }
 
-/// The entries flushed due to an append operation
-pub(crate) struct AcceptedMetaData<T: Entry> {
-    pub accepted_idx: usize,
-    pub entries: Vec<T>,
+/// Creates an asynchronous logger which outputs to both the terminal and a specified file_path.
+#[cfg(feature = "logging")]
+pub fn create_logger(file_path: &str) -> Logger {
+    let path = std::path::Path::new(file_path);
+    let prefix = path.parent().unwrap(); // todo change unwrap
+    std::fs::create_dir_all(prefix).unwrap(); // todo change unwrap
+
+    let file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(file_path)
+        .unwrap(); // todo change unwrap
+
+    let term_decorator = slog_term::TermDecorator::new().build();
+    let file_decorator = slog_term::PlainSyncDecorator::new(file);
+
+    let term_fuse = slog_term::FullFormat::new(term_decorator).build().fuse();
+    let file_fuse = slog_term::FullFormat::new(file_decorator).build().fuse();
+
+    let both = Mutex::new(slog::Duplicate::new(term_fuse, file_fuse)).fuse();
+    let both = slog_async::Async::new(both).build().fuse();
+    Logger::root(both, o!())
 }

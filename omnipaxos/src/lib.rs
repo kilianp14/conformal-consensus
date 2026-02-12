@@ -24,8 +24,6 @@ mod omni_paxos;
 pub mod predictor;
 /// The core replication algorithm of OmniPaxos.
 pub mod sequence_paxos;
-/// Traits and structs related to the backend storage of an OmniPaxos server.
-pub mod storage;
 /// A module containing helper functions and structs.
 pub mod utils;
 

@@ -4,10 +4,9 @@ use crate::{
     messages::Message,
     predictor::ConformalModePredictor,
     sequence_paxos::SequencePaxos,
-    storage::{Entry, Storage},
     utils::{
-        defaults::{BUFFER_SIZE, ELECTION_TIMEOUT, FLUSH_BATCH_TIMEOUT, RESEND_MESSAGE_TIMEOUT},
-        Ballot, ConfigurationId, FlexibleQuorum, LogEntry, LogicalClock, NodeId, Phase,
+        defaults::{BUFFER_SIZE, ELECTION_TIMEOUT, RESEND_MESSAGE_TIMEOUT},
+        Ballot, Entry, FlexibleQuorum, LogEntry, LogicalClock, NodeId, Phase,
     },
 };
 #[cfg(any(feature = "toml_config", feature = "serde"))]
@@ -56,25 +55,20 @@ impl OmniPaxosConfig {
     }
 
     /// Checks all configuration fields and returns the local OmniPaxos node if successful.
-    pub fn build<T, B>(self, storage: B) -> Result<OmniPaxos<T, B>, ConfigError>
+    pub fn build<T>(self) -> Result<OmniPaxos<T>, ConfigError>
     where
         T: Entry,
-        B: Storage<T>,
     {
         self.validate()?;
         // Use stored ballot as initial BLE leader
-        let recovered_leader = storage
-            .get_promise()
-            .expect("storage error while trying to read promise");
         Ok(OmniPaxos {
-            ble: BallotLeaderElection::with(self.clone().into(), recovered_leader),
+            ble: BallotLeaderElection::with(self.clone().into()),
             election_clock: LogicalClock::with(self.server_config.election_tick_timeout),
             resend_message_clock: LogicalClock::with(
                 self.server_config.resend_message_tick_timeout,
             ),
             mode_predictor: ConformalModePredictor {},
-            flush_batch_clock: LogicalClock::with(self.server_config.flush_batch_tick_timeout),
-            seq_paxos: SequencePaxos::with(self.into(), storage),
+            seq_paxos: SequencePaxos::with(self.into()),
         })
     }
 }
@@ -89,9 +83,6 @@ impl OmniPaxosConfig {
 #[cfg_attr(feature = "toml_config", serde(default))]
 #[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct ClusterConfig {
-    /// The identifier for the cluster configuration that this OmniPaxos server is part of. Must
-    /// not be 0 and be greater than the previous configuration's id.
-    pub configuration_id: ConfigurationId,
     /// The nodes in the cluster i.e. the `pid`s of the servers in the configuration.
     pub nodes: Vec<NodeId>,
     /// Defines read and write quorum sizes. Can be used for different latency vs fault tolerance tradeoffs.
@@ -103,7 +94,6 @@ impl ClusterConfig {
     pub fn validate(&self) -> Result<(), ConfigError> {
         let num_nodes = self.nodes.len();
         valid_config!(num_nodes > 1, "Need more than 1 node");
-        valid_config!(self.configuration_id != 0, "Configuration ID cannot be 0");
         if let Some(FlexibleQuorum {
             read_quorum_size,
             write_quorum_size,
@@ -130,21 +120,19 @@ impl ClusterConfig {
     }
 
     /// Checks all configuration fields and builds a local OmniPaxos node with settings for this
-    /// node defined in `server_config` and using storage `with_storage`.
-    pub fn build_for_server<T, B>(
+    /// node defined in `server_config`
+    pub fn build_for_server<T>(
         self,
         server_config: ServerConfig,
-        with_storage: B,
-    ) -> Result<OmniPaxos<T, B>, ConfigError>
+    ) -> Result<OmniPaxos<T>, ConfigError>
     where
         T: Entry,
-        B: Storage<T>,
     {
         let op_config = OmniPaxosConfig {
             cluster_config: self,
             server_config,
         };
-        op_config.build(with_storage)
+        op_config.build()
     }
 }
 
@@ -168,10 +156,6 @@ pub struct ServerConfig {
     pub resend_message_tick_timeout: u64,
     /// The buffer size for outgoing messages.
     pub buffer_size: usize,
-    /// The size of the buffer for log batching. The default is 1, which means no batching.
-    pub batch_size: usize,
-    /// The number of calls to `tick()` before the batched log entries are flushed.
-    pub flush_batch_tick_timeout: u64,
     /// Custom priority for this node to be elected as the leader.
     pub leader_priority: u32,
     /// The path where the default logger logs events.
@@ -188,7 +172,6 @@ impl ServerConfig {
     pub fn validate(&self) -> Result<(), ConfigError> {
         valid_config!(self.pid != 0, "Server pid cannot be 0");
         valid_config!(self.buffer_size != 0, "Buffer size must be greater than 0");
-        valid_config!(self.batch_size != 0, "Batch size must be greater than 0");
         valid_config!(
             self.election_tick_timeout != 0,
             "Election tick timeout must be greater than 0"
@@ -208,8 +191,6 @@ impl Default for ServerConfig {
             election_tick_timeout: ELECTION_TIMEOUT,
             resend_message_tick_timeout: RESEND_MESSAGE_TIMEOUT,
             buffer_size: BUFFER_SIZE,
-            batch_size: 1,
-            flush_batch_tick_timeout: FLUSH_BATCH_TIMEOUT,
             leader_priority: 0,
             #[cfg(feature = "logging")]
             logger_file_path: None,
@@ -221,23 +202,20 @@ impl Default for ServerConfig {
 
 /// The `OmniPaxos` struct represents an OmniPaxos server. Maintains the replicated log that can be read from and appended to.
 /// It also handles incoming messages and produces outgoing messages that you need to fetch and send periodically using your own network implementation.
-pub struct OmniPaxos<T, B>
+pub struct OmniPaxos<T>
 where
     T: Entry,
-    B: Storage<T>,
 {
-    seq_paxos: SequencePaxos<T, B>,
+    seq_paxos: SequencePaxos<T>,
     ble: BallotLeaderElection,
     mode_predictor: ConformalModePredictor,
     election_clock: LogicalClock,
     resend_message_clock: LogicalClock,
-    flush_batch_clock: LogicalClock,
 }
 
-impl<T, B> OmniPaxos<T, B>
+impl<T> OmniPaxos<T>
 where
     T: Entry,
-    B: Storage<T>,
 {
     /// Return the decided index. 0 means that no entry has been decided.
     pub fn get_decided_idx(&self) -> usize {
@@ -276,12 +254,7 @@ where
 
     /// Read entry at index `idx` in the log. Returns `None` if `idx` is out of bounds.
     pub fn read(&self, idx: usize) -> Option<LogEntry<T>> {
-        match self
-            .seq_paxos
-            .internal_storage
-            .read(idx..idx + 1)
-            .expect("storage error while trying to read log entries")
-        {
+        match self.seq_paxos.internal_storage.read(idx..idx + 1) {
             Some(mut v) => v.pop(),
             None => None,
         }
@@ -292,10 +265,7 @@ where
     where
         R: RangeBounds<usize>,
     {
-        self.seq_paxos
-            .internal_storage
-            .read(r)
-            .expect("storage error while trying to read log entries")
+        self.seq_paxos.internal_storage.read(r)
     }
 
     /// Read all decided entries starting at `from_idx` (inclusive) in the log. Returns `None` if `from_idx` is out of bounds.
@@ -303,7 +273,6 @@ where
         self.seq_paxos
             .internal_storage
             .read_decided_suffix(from_idx)
-            .expect("storage error while trying to read decided log suffix")
     }
 
     /// Handle an incoming message
@@ -335,9 +304,6 @@ where
         }
         if self.resend_message_clock.tick_and_check_timeout() {
             self.seq_paxos.resend_message_timeout();
-        }
-        if self.flush_batch_clock.tick_and_check_timeout() {
-            self.seq_paxos.flush_batch_timeout();
         }
     }
 

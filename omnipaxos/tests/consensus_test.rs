@@ -1,9 +1,8 @@
 pub mod utils;
 
 use kompact::prelude::{promise, Ask, FutureCollection};
-use omnipaxos::{storage::Storage, OmniPaxosConfig};
 use serial_test::serial;
-use utils::{verification::*, StorageType, TestConfig, TestSystem, Value};
+use utils::{verification::*, TestConfig, TestSystem};
 
 /// Verifies the 3 properties that the Paxos algorithm offers
 /// Quorum, Validity, Uniform Agreement
@@ -51,90 +50,4 @@ fn consensus_test() {
         Ok(_) => {}
         Err(e) => panic!("Error on kompact shutdown: {}", e),
     };
-}
-
-#[test]
-#[serial]
-fn read_test() {
-    let cfg = TestConfig::load("consensus_test").expect("Test config loaded");
-
-    let log: Vec<Value> = [1, 3, 2, 7, 5, 10, 29, 100, 8, 12]
-        .iter()
-        .map(|v| Value::with_id(*v as u64))
-        .collect();
-    let decided_idx = 6;
-
-    let mut storage = StorageType::<Value>::with(cfg.storage_type);
-    storage
-        .append_entries(log.clone())
-        .expect("Failed to append entries");
-    storage
-        .set_decided_idx(decided_idx)
-        .expect("Failed to set decided index");
-
-    let mut op_config = OmniPaxosConfig::default();
-    op_config.server_config.pid = 1;
-    op_config.cluster_config.nodes = vec![1, 2, 3];
-    op_config.cluster_config.configuration_id = 1;
-
-    let omni_paxos = op_config.clone().build(storage).unwrap();
-
-    // read decided entries
-    let entries = omni_paxos
-        .read_decided_suffix(0)
-        .expect("No decided entries");
-    let expected_entries = log.get(0..decided_idx).unwrap();
-    verify_entries(entries.as_slice(), expected_entries, 0, decided_idx);
-
-    // read entry
-    let idx = 4;
-    let entry = omni_paxos.read(idx).expect("No entry");
-    let expected_entries = log.get(idx..=idx).unwrap();
-    verify_entries(&[entry], expected_entries, 0, decided_idx);
-
-    // read none
-    let idx = log.len();
-    let entry = omni_paxos.read(idx);
-    assert!(entry.is_none(), "Expected None, got: {:?}", entry);
-}
-
-#[test]
-#[serial]
-fn read_entries_test() {
-    let cfg = TestConfig::load("consensus_test").expect("Test config loaded");
-
-    let log: Vec<Value> = [1, 3, 2, 7, 5, 10, 29, 100, 8, 12]
-        .iter()
-        .map(|v| Value::with_id(*v as u64))
-        .collect();
-    let decided_idx = 6;
-
-    let mut storage = StorageType::<Value>::with(cfg.storage_type);
-    storage
-        .append_entries(log.clone())
-        .expect("Failed to append entries");
-    storage
-        .set_decided_idx(decided_idx)
-        .expect("Failed to set decided index");
-    let mut op_config = OmniPaxosConfig::default();
-    op_config.server_config.pid = 1;
-    op_config.cluster_config.nodes = vec![1, 2, 3];
-    op_config.cluster_config.configuration_id = 1;
-
-    let omni_paxos = op_config.clone().build(storage).unwrap();
-
-    // read snapshot + entries
-    let from_idx = 3;
-    let to_idx = decided_idx;
-    let entries = omni_paxos
-        .read_entries(from_idx..to_idx)
-        .expect("No entries");
-    let expected_entries = log.get(from_idx..to_idx).unwrap();
-    verify_entries(&entries, expected_entries, 0, decided_idx);
-
-    // read none
-    let from_idx = 0;
-    let to_idx = log.len();
-    let entries = omni_paxos.read_entries(from_idx..=to_idx);
-    assert!(entries.is_none(), "Expected None, got: {:?}", entries);
 }

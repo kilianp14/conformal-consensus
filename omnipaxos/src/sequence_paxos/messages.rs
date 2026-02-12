@@ -1,7 +1,4 @@
-use crate::{
-    storage::Entry,
-    utils::{Ballot, LogSync, NodeId, SequenceNumber},
-};
+use crate::utils::{Ballot, Entry, LogSync, NodeId, SequenceNumber};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;

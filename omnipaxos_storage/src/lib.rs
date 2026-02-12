@@ -1,6 +1,0 @@
-//! A library of storage implementations for [OmniPaxos](https://crates.io/crates/omnipaxos)
-
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
-#![deny(missing_docs)]
-/// an in-memory storage implementation with fast read and writes
-pub mod memory_storage;

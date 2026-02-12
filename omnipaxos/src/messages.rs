@@ -1,6 +1,7 @@
 use crate::{
-    leader_election::messages::BLEMessage, sequence_paxos::messages::PaxosMessage, storage::Entry,
-    utils::NodeId,
+    leader_election::messages::BLEMessage,
+    sequence_paxos::messages::PaxosMessage,
+    utils::{Entry, NodeId},
 };
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

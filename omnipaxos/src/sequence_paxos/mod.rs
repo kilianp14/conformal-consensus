@@ -1,22 +1,20 @@
 #[cfg(feature = "logging")]
-use crate::utils::logger::create_logger;
+use crate::utils::create_logger;
 use crate::{
-    storage::{
-        internal_storage::{InternalStorage, InternalStorageConfig},
-        Entry, Storage,
-    },
+    sequence_paxos::log::MemoryStorage,
     utils::{
-        defaults::DEFAULT_MODE, Ballot, FlexibleQuorum, LogSync, Mode, NodeId, Phase, Quorum, Role,
-        SequenceNumber, READ_ERROR_MSG, WRITE_ERROR_MSG,
+        defaults::DEFAULT_MODE, Ballot, Entry, FlexibleQuorum, LogSync, Mode, NodeId, Phase,
+        Quorum, Role, SequenceNumber,
     },
     OmniPaxosConfig,
 };
 #[cfg(feature = "logging")]
-use slog::{debug, info, trace, warn, Logger};
+use slog::{info, Logger};
 use std::{fmt::Debug, vec};
 
 mod follower;
 mod leader;
+mod log;
 /// The different messages used by the SequencePaxos layer
 pub mod messages;
 //mod temp;
@@ -39,7 +37,6 @@ pub(crate) struct SequencePaxosConfig {
     pid: NodeId,
     peers: Vec<NodeId>,
     buffer_size: usize,
-    pub(crate) batch_size: usize,
     flexible_quorum: Option<FlexibleQuorum>,
     #[cfg(feature = "logging")]
     logger_file_path: Option<String>,
@@ -61,7 +58,6 @@ impl From<OmniPaxosConfig> for SequencePaxosConfig {
             peers,
             flexible_quorum: config.cluster_config.flexible_quorum,
             buffer_size: config.server_config.buffer_size,
-            batch_size: config.server_config.batch_size,
             #[cfg(feature = "logging")]
             logger_file_path: config.server_config.logger_file_path,
             #[cfg(feature = "logging")]
@@ -73,12 +69,11 @@ impl From<OmniPaxosConfig> for SequencePaxosConfig {
 /// a Sequence Paxos replica. Maintains local state of the replicated log, handles incoming messages and produces outgoing messages that the user has to fetch periodically and send using a network implementation.
 /// User also has to periodically fetch the decided entries that are guaranteed to be strongly consistent and linearizable, and therefore also safe to be used in the higher level application.
 /// If snapshots are not desired to be used, use `()` for the type parameter `S`.
-pub(crate) struct SequencePaxos<T, B>
+pub(crate) struct SequencePaxos<T>
 where
     T: Entry,
-    B: Storage<T>,
 {
-    pub(crate) internal_storage: InternalStorage<B, T>,
+    pub(crate) internal_storage: MemoryStorage<T>,
     pid: NodeId,
     peers: Vec<NodeId>, // excluding self pid
     state: (Role, Phase),
@@ -97,14 +92,13 @@ where
     logger: Logger,
 }
 
-impl<T, B> SequencePaxos<T, B>
+impl<T> SequencePaxos<T>
 where
     T: Entry,
-    B: Storage<T>,
 {
     /*** User functions ***/
     /// Creates a Sequence Paxos replica.
-    pub(crate) fn with(config: SequencePaxosConfig, storage: B) -> Self {
+    pub(crate) fn with(config: SequencePaxosConfig) -> Self {
         let pid = config.pid;
         let peers = config.peers;
         let num_nodes = &peers.len() + 1;
@@ -117,6 +111,7 @@ where
             let sq = (num_nodes * 3).div_ceil(4);
             std::cmp::min(num_nodes, sq)
         };
+        let leader = Ballot::default();
         assert!(
             quorum_size < super_quorum_size,
             "Quorum size: {} must be less than super quorum size: {}. N: {}",
@@ -126,35 +121,13 @@ where
         );
         let max_peer_pid = peers.iter().max().unwrap();
         let max_pid = *std::cmp::max(max_peer_pid, &pid) as usize;
-        let mut outgoing = Vec::with_capacity(config.buffer_size);
-        let (state, leader) = match storage
-            .get_promise()
-            .expect("storage error while trying to read promise")
-        {
-            // if we recover a promise from storage then we must do failure recovery
-            Some(b) => {
-                let state = (Role::Follower, Phase::Recover);
-                for peer_pid in &peers {
-                    let prepreq = PrepareReq { n: b };
-                    outgoing.push(PaxosMessage {
-                        from: pid,
-                        to: *peer_pid,
-                        msg: PaxosMsg::PrepareReq(prepreq),
-                    });
-                }
-                (state, b)
-            }
-            None => ((Role::Follower, Phase::None), Ballot::default()),
-        };
-        let internal_storage_config = InternalStorageConfig {
-            batch_size: config.batch_size,
-        };
+        let outgoing = Vec::with_capacity(config.buffer_size);
         let mode = DEFAULT_MODE;
         let mut paxos = SequencePaxos {
-            internal_storage: InternalStorage::with(storage, internal_storage_config),
+            internal_storage: MemoryStorage::new(),
             pid,
             peers,
-            state,
+            state: (Role::Follower, Phase::None),
             buffered_proposals: vec![],
             outgoing,
             leader_state: LeaderState::<T>::with(leader, max_pid, quorum),
@@ -177,10 +150,7 @@ where
                 }
             },
         };
-        paxos
-            .internal_storage
-            .set_promise(leader)
-            .expect(WRITE_ERROR_MSG);
+        paxos.internal_storage.set_promise(leader);
         #[cfg(feature = "logging")]
         {
             info!(
@@ -205,15 +175,6 @@ where
         match self.state.0 {
             Role::Leader => self.resend_messages_leader(),
             Role::Follower => self.resend_messages_follower(),
-        }
-    }
-
-    /// Flushes any batched log entries and sends their corresponding Accept or Accepted messages.
-    pub(crate) fn flush_batch_timeout(&mut self) {
-        match self.state {
-            (Role::Leader, Phase::Accept) => self.flush_batch_leader(),
-            (Role::Follower, Phase::Accept) => self.flush_batch_follower(),
-            _ => (),
         }
     }
 
@@ -273,12 +234,8 @@ where
     /// current state of our own log. The `common_prefix_idx` marks where in the log the other server
     /// needs to be sync from.
     fn create_log_sync(&self, common_prefix_idx: usize) -> LogSync<T> {
-        let suffix = self
-            .internal_storage
-            .get_suffix(common_prefix_idx)
-            .expect(READ_ERROR_MSG);
         LogSync {
-            suffix,
+            suffix: self.internal_storage.get_suffix(common_prefix_idx),
             sync_idx: common_prefix_idx,
         }
     }

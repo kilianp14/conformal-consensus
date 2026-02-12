@@ -1,32 +1,27 @@
-use crate::utils::{AcceptedMetaData, Ballot, PromiseMetaData, WRITE_ERROR_MSG};
+use crate::{
+    sequence_paxos::{messages::*, Promise, SequencePaxos},
+    utils::{Ballot, Entry, LogSync, NodeId, Phase, PromiseMetaData, Quorum, Role, SequenceNumber},
+};
+#[cfg(feature = "logging")]
+use slog::{debug, info};
 
-use super::*;
-
-mod state;
-
-pub(crate) use state::LeaderState;
-
-impl<T, B> SequencePaxos<T, B>
+impl<T> SequencePaxos<T>
 where
     T: Entry,
-    B: Storage<T>,
 {
     /// Handle a new leader. Should be called when the leader election has elected a new leader with the ballot `n`
     /*** Leader ***/
     pub(crate) fn handle_leader(&mut self, n: Ballot) {
-        if n <= self.leader_state.n_leader || n <= self.internal_storage.get_promise() {
+        if n <= self.internal_storage.get_promise() {
             return;
         }
         #[cfg(feature = "logging")]
-        debug!(self.logger, "Newly elected leader: {:?}", n);
+        info!(self.logger, "Newly elected leader: {:?}", n);
         if self.pid == n.pid {
             self.leader_state =
                 LeaderState::with(n, self.leader_state.max_pid, self.leader_state.quorum);
-            // Flush any pending writes
-            // Don't have to handle flushed entries here because we will sync with followers
-            let _ = self.internal_storage.flush_batch().expect(WRITE_ERROR_MSG);
-            self.internal_storage.set_promise(n).expect(WRITE_ERROR_MSG);
             /* insert my promise */
+            self.internal_storage.set_promise(n);
             let na = self.internal_storage.get_accepted_round();
             let decided_idx = self.internal_storage.get_decided_idx();
             let accepted_idx = self.internal_storage.get_accepted_idx();
@@ -49,17 +44,13 @@ where
             };
             self.send_to_all_peers(PaxosMsg::Prepare(prep));
         } else {
-            self.become_follower();
+            self.state.0 = Role::Follower;
         }
-    }
-
-    pub(crate) fn become_follower(&mut self) {
-        self.state.0 = Role::Follower;
     }
 
     pub(crate) fn handle_preparereq(&mut self, prepreq: PrepareReq, from: NodeId) {
         #[cfg(feature = "logging")]
-        debug!(self.logger, "Incoming message PrepareReq from {}", from);
+        info!(self.logger, "Incoming message PrepareReq from {}", from);
         if self.state.0 == Role::Leader && prepreq.n <= self.leader_state.n_leader {
             self.leader_state.reset_promise(from);
             self.leader_state.set_latest_accept_meta(from, None);
@@ -76,27 +67,15 @@ where
     }
 
     pub(crate) fn accept_entry_leader(&mut self, entry: T) {
-        let accepted_metadata = self
-            .internal_storage
-            .append_entry_with_batching(entry)
-            .expect(WRITE_ERROR_MSG);
-        if let Some(metadata) = accepted_metadata {
-            self.leader_state
-                .set_accepted_idx(self.pid, metadata.accepted_idx);
-            self.send_acceptdecide(metadata);
-        }
+        let accepted_idx = self.internal_storage.append_entry(entry.clone());
+        self.leader_state.set_accepted_idx(self.pid, accepted_idx);
+        self.send_slowaccept(vec![entry]);
     }
 
     pub(crate) fn accept_entries_leader(&mut self, entries: Vec<T>) {
-        let accepted_metadata = self
-            .internal_storage
-            .append_entries_with_batching(entries)
-            .expect(WRITE_ERROR_MSG);
-        if let Some(metadata) = accepted_metadata {
-            self.leader_state
-                .set_accepted_idx(self.pid, metadata.accepted_idx);
-            self.send_acceptdecide(metadata);
-        }
+        let accepted_idx = self.internal_storage.append_entries(entries.clone());
+        self.leader_state.set_accepted_idx(self.pid, accepted_idx);
+        self.send_slowaccept(entries);
     }
 
     fn send_prepare(&mut self, to: NodeId) {
@@ -145,14 +124,14 @@ where
         self.send_msg_to(to, PaxosMsg::AcceptSync(acc_sync));
     }
 
-    fn send_acceptdecide(&mut self, accepted: AcceptedMetaData<T>) {
+    fn send_slowaccept(&mut self, entries: Vec<T>) {
         let decided_idx = self.internal_storage.get_decided_idx();
         for pid in self.leader_state.get_promised_followers() {
             let latest_accdec = self.get_latest_accdec_message(pid);
             match latest_accdec {
                 // Modify existing SlowAccept message to follower
                 Some(accdec) => {
-                    accdec.entries.extend(accepted.entries.iter().cloned());
+                    accdec.entries.extend(entries.clone());
                     accdec.decided_idx = decided_idx;
                 }
                 // Add new AcceptDecide message to follower
@@ -163,7 +142,7 @@ where
                         n: self.leader_state.n_leader,
                         seq_num: self.leader_state.next_seq_num(pid),
                         decided_idx,
-                        entries: accepted.entries.clone(),
+                        entries: entries.clone(),
                     };
                     self.send_msg_to(pid, PaxosMsg::SlowAccept(acc));
                 }
@@ -187,16 +166,13 @@ where
     fn handle_majority_promises(&mut self) {
         let max_promise_sync = self.leader_state.take_max_promise_sync();
         let decided_idx = self.leader_state.get_max_decided_idx();
-        let mut new_accepted_idx = self
-            .internal_storage
-            .sync_log(self.leader_state.n_leader, decided_idx, max_promise_sync)
-            .expect(WRITE_ERROR_MSG);
+        self.internal_storage.set_decided_idx(decided_idx);
+        self.internal_storage
+            .set_accepted_round(self.leader_state.n_leader);
+        let mut new_accepted_idx = self.internal_storage.sync_log(max_promise_sync);
         if !self.buffered_proposals.is_empty() {
             let entries = std::mem::take(&mut self.buffered_proposals);
-            new_accepted_idx = self
-                .internal_storage
-                .append_entries_without_batching(entries)
-                .expect(WRITE_ERROR_MSG);
+            new_accepted_idx = self.internal_storage.append_entries(entries);
         }
         self.state = (Role::Leader, Phase::Accept);
         self.leader_state
@@ -236,15 +212,6 @@ where
     }
 
     pub(crate) fn handle_accepted(&mut self, accepted: Accepted, from: NodeId) {
-        #[cfg(feature = "logging")]
-        info!(
-            self.logger,
-            "Got Accepted from {}, idx: {}, chosen_idx: {}, accepted: {:?}",
-            from,
-            accepted.accepted_idx,
-            self.internal_storage.get_decided_idx(),
-            self.leader_state.accepted_indexes
-        );
         if accepted.n == self.leader_state.n_leader && self.state == (Role::Leader, Phase::Accept) {
             self.leader_state
                 .set_accepted_idx(from, accepted.accepted_idx);
@@ -252,9 +219,7 @@ where
                 && self.leader_state.is_chosen(accepted.accepted_idx)
             {
                 let decided_idx = accepted.accepted_idx;
-                self.internal_storage
-                    .set_decided_idx(decided_idx)
-                    .expect(WRITE_ERROR_MSG);
+                self.internal_storage.set_decided_idx(decided_idx);
                 for pid in self.leader_state.get_promised_followers() {
                     let latest_accdec = self.get_latest_accdec_message(pid);
                     match latest_accdec {
@@ -264,6 +229,15 @@ where
                 }
             }
         }
+        #[cfg(feature = "logging")]
+        info!(
+            self.logger,
+            "Got Accepted from {}, idx: {}, chosen_idx: {}, accepted: {:?}",
+            from,
+            accepted.accepted_idx,
+            self.internal_storage.get_decided_idx(),
+            self.leader_state.accepted_indexes
+        );
     }
 
     fn get_latest_accdec_message(&mut self, to: NodeId) -> Option<&mut SlowAccept<T>> {
@@ -310,16 +284,225 @@ where
             _ => (),
         }
     }
+}
 
-    pub(crate) fn flush_batch_leader(&mut self) {
-        let accepted_metadata = self
-            .internal_storage
-            .flush_batch_and_get_entries()
-            .expect(WRITE_ERROR_MSG);
-        if let Some(metadata) = accepted_metadata {
-            self.leader_state
-                .set_accepted_idx(self.pid, metadata.accepted_idx);
-            self.send_acceptdecide(metadata);
+#[derive(Debug, Clone)]
+/// The promise state of a node.
+enum PromiseState {
+    /// Not promised to any leader
+    NotPromised,
+    /// Promised to my ballot
+    Promised(PromiseMetaData),
+    /// Promised to a leader who's ballot is greater than mine
+    PromisedHigher,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LeaderState<T>
+where
+    T: Entry,
+{
+    pub(crate) n_leader: Ballot,
+    promises_meta: Vec<PromiseState>,
+    // the sequence number of accepts for each follower where AcceptSync has sequence number = 1
+    follower_seq_nums: Vec<SequenceNumber>,
+    pub(crate) accepted_indexes: Vec<usize>,
+    max_promise_meta: PromiseMetaData,
+    max_promise_sync: Option<LogSync<T>>,
+    latest_accept_meta: Vec<Option<(Ballot, usize)>>, //  index in outgoing
+    pub(crate) max_pid: usize,
+    // The number of promises needed in the prepare phase to become synced and
+    // the number of accepteds needed in the accept phase to decide an entry.
+    pub(crate) quorum: Quorum,
+}
+
+impl<T> LeaderState<T>
+where
+    T: Entry,
+{
+    pub(crate) fn with(n_leader: Ballot, max_pid: usize, quorum: Quorum) -> Self {
+        Self {
+            n_leader,
+            promises_meta: vec![PromiseState::NotPromised; max_pid],
+            follower_seq_nums: vec![SequenceNumber::default(); max_pid],
+            accepted_indexes: vec![0; max_pid],
+            max_promise_meta: PromiseMetaData::default(),
+            max_promise_sync: None,
+            latest_accept_meta: vec![None; max_pid],
+            max_pid,
+            quorum,
         }
+    }
+
+    fn pid_to_idx(pid: NodeId) -> usize {
+        (pid - 1) as usize
+    }
+
+    // Resets `pid`'s accept sequence to indicate they are in the next session of accepts
+    pub(crate) fn increment_seq_num_session(&mut self, pid: NodeId) {
+        let idx = Self::pid_to_idx(pid);
+        self.follower_seq_nums[idx].session += 1;
+        self.follower_seq_nums[idx].counter = 0;
+    }
+
+    pub(crate) fn next_seq_num(&mut self, pid: NodeId) -> SequenceNumber {
+        let idx = Self::pid_to_idx(pid);
+        self.follower_seq_nums[idx].counter += 1;
+        self.follower_seq_nums[idx]
+    }
+
+    pub(crate) fn get_seq_num(&mut self, pid: NodeId) -> SequenceNumber {
+        self.follower_seq_nums[Self::pid_to_idx(pid)]
+    }
+
+    pub(crate) fn set_promise(
+        &mut self,
+        prom: Promise<T>,
+        from: NodeId,
+        check_max_prom: bool,
+    ) -> bool {
+        let promise_meta = PromiseMetaData {
+            n_accepted: prom.n_accepted,
+            accepted_idx: prom.accepted_idx,
+            decided_idx: prom.decided_idx,
+            pid: from,
+        };
+        if check_max_prom && promise_meta > self.max_promise_meta {
+            self.max_promise_meta = promise_meta.clone();
+            self.max_promise_sync = prom.log_sync;
+        }
+        self.promises_meta[Self::pid_to_idx(from)] = PromiseState::Promised(promise_meta);
+        let num_promised = self
+            .promises_meta
+            .iter()
+            .filter(|p| matches!(p, PromiseState::Promised(_)))
+            .count();
+        self.quorum.is_prepare_quorum(num_promised)
+    }
+
+    pub(crate) fn reset_promise(&mut self, pid: NodeId) {
+        self.promises_meta[Self::pid_to_idx(pid)] = PromiseState::NotPromised;
+    }
+
+    /// Node `pid` seen with ballot greater than my ballot
+    pub(crate) fn lost_promise(&mut self, pid: NodeId) {
+        self.promises_meta[Self::pid_to_idx(pid)] = PromiseState::PromisedHigher;
+    }
+
+    pub(crate) fn take_max_promise_sync(&mut self) -> Option<LogSync<T>> {
+        std::mem::take(&mut self.max_promise_sync)
+    }
+
+    pub(crate) fn get_max_promise_meta(&self) -> &PromiseMetaData {
+        &self.max_promise_meta
+    }
+
+    pub(crate) fn get_max_decided_idx(&self) -> usize {
+        self.promises_meta
+            .iter()
+            .filter_map(|p| match p {
+                PromiseState::Promised(m) => Some(m.decided_idx),
+                _ => None,
+            })
+            .max()
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn get_promise_meta(&self, pid: NodeId) -> &PromiseMetaData {
+        match &self.promises_meta[Self::pid_to_idx(pid)] {
+            PromiseState::Promised(metadata) => metadata,
+            _ => panic!("No Metadata found for promised follower"),
+        }
+    }
+
+    pub(crate) fn reset_latest_accept_meta(&mut self) {
+        self.latest_accept_meta = vec![None; self.max_pid];
+    }
+
+    pub(crate) fn get_promised_followers(&self) -> Vec<NodeId> {
+        self.promises_meta
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, x)| match x {
+                PromiseState::Promised(_) if idx != Self::pid_to_idx(self.n_leader.pid) => {
+                    Some((idx + 1) as NodeId)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The pids of peers which have not promised a higher ballot than mine.
+    pub(crate) fn get_preparable_peers(&self, peers: &[NodeId]) -> Vec<NodeId> {
+        peers
+            .iter()
+            .filter_map(|pid| {
+                let idx = Self::pid_to_idx(*pid);
+                match self.promises_meta.get(idx).unwrap() {
+                    PromiseState::NotPromised => Some(*pid),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    pub(crate) fn set_latest_accept_meta(&mut self, pid: NodeId, idx: Option<usize>) {
+        let meta = idx.map(|x| (self.n_leader, x));
+        self.latest_accept_meta[Self::pid_to_idx(pid)] = meta;
+    }
+
+    pub(crate) fn set_accepted_idx(&mut self, pid: NodeId, idx: usize) {
+        self.accepted_indexes[Self::pid_to_idx(pid)] = idx;
+    }
+
+    pub(crate) fn get_latest_accept_meta(&self, pid: NodeId) -> Option<(Ballot, usize)> {
+        self.latest_accept_meta
+            .get(Self::pid_to_idx(pid))
+            .unwrap()
+            .as_ref()
+            .copied()
+    }
+
+    pub(crate) fn get_decided_idx(&self, pid: NodeId) -> Option<usize> {
+        match self.promises_meta.get(Self::pid_to_idx(pid)).unwrap() {
+            PromiseState::Promised(metadata) => Some(metadata.decided_idx),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn is_chosen(&self, idx: usize) -> bool {
+        let num_accepted = self
+            .accepted_indexes
+            .iter()
+            .filter(|la| **la >= idx)
+            .count();
+        self.quorum.is_accept_quorum(num_accepted)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*; // Import functions and types from this module
+    #[test]
+    fn preparable_peers_test() {
+        type Value = ();
+
+        impl Entry for Value {}
+
+        let nodes = vec![6, 7, 8];
+        let quorum = Quorum::Majority(2);
+        let max_pid = 8;
+        let leader_state =
+            LeaderState::<Value>::with(Ballot::with(1, 1, max_pid), max_pid as usize, quorum);
+        let prep_peers = leader_state.get_preparable_peers(&nodes);
+        assert_eq!(prep_peers, nodes);
+
+        let nodes = vec![7, 1, 100, 4, 6];
+        let quorum = Quorum::Majority(3);
+        let max_pid = 100;
+        let leader_state =
+            LeaderState::<Value>::with(Ballot::with(1, 1, max_pid), max_pid as usize, quorum);
+        let prep_peers = leader_state.get_preparable_peers(&nodes);
+        assert_eq!(prep_peers, nodes);
     }
 }

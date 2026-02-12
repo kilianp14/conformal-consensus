@@ -1,8 +1,8 @@
 /// Ballot Leader Election algorithm for electing new leaders
-use crate::utils::{defaults::*, ConfigurationId, FlexibleQuorum, Phase, Quorum, Role};
+use crate::utils::{defaults::*, FlexibleQuorum, Phase, Quorum, Role};
 
 #[cfg(feature = "logging")]
-use crate::utils::logger::create_logger;
+use crate::utils::create_logger;
 use crate::{
     utils::{Ballot, NodeId},
     OmniPaxosConfig,
@@ -15,7 +15,6 @@ pub mod messages;
 use messages::*;
 
 const INITIAL_ROUND: u32 = 1;
-const RECOVERY_ROUND: u32 = 0;
 
 /// A Ballot Leader Election component. Used in conjunction with OmniPaxos to handle the election of a leader for a cluster of OmniPaxos servers,
 /// incoming messages and produces outgoing messages that the user has to fetch periodically and send using a network implementation.
@@ -50,21 +49,13 @@ pub(crate) struct BallotLeaderElection {
 
 impl BallotLeaderElection {
     /// Construct a new BallotLeaderElection node
-    pub(crate) fn with(config: BLEConfig, recovered_leader: Option<Ballot>) -> Self {
-        let config_id = config.configuration_id;
+    pub(crate) fn with(config: BLEConfig) -> Self {
         let pid = config.pid;
         let peers = config.peers;
         let num_nodes = &peers.len() + 1;
         let quorum = Quorum::with(config.flexible_quorum, num_nodes);
-        let mut initial_ballot = Ballot::with(config_id, INITIAL_ROUND, config.priority, pid);
-        let initial_leader = match recovered_leader {
-            Some(b) if b != Ballot::default() => {
-                // Prevents a recovered server from retaining BLE leadership with the same ballot.
-                initial_ballot.n = RECOVERY_ROUND;
-                b
-            }
-            _ => initial_ballot,
-        };
+        let initial_ballot = Ballot::with(INITIAL_ROUND, config.priority, pid);
+        let initial_leader = initial_ballot;
         let mut ble = BallotLeaderElection {
             pid,
             peers,
@@ -237,7 +228,7 @@ impl BallotLeaderElection {
     }
 
     fn handle_reply(&mut self, rep: HeartbeatReply) {
-        if rep.round == self.hb_round && rep.ballot.config_id == self.current_ballot.config_id {
+        if rep.round == self.hb_round {
             self.heartbeat_replies.push(rep);
         }
     }
@@ -258,7 +249,6 @@ impl BallotLeaderElection {
 /// * `logger_file_path`: The path where the default logger logs events.
 #[derive(Clone, Debug)]
 pub(crate) struct BLEConfig {
-    configuration_id: ConfigurationId,
     pid: NodeId,
     peers: Vec<NodeId>,
     priority: u32,
@@ -281,7 +271,6 @@ impl From<OmniPaxosConfig> for BLEConfig {
             .collect();
 
         Self {
-            configuration_id: config.cluster_config.configuration_id,
             pid,
             peers,
             priority: config.server_config.leader_priority,

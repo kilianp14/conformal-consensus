@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["omnipaxos", "omnipaxos_storage", "omnipaxos_macros"]
+members = ["omnipaxos", "omnipaxos_macros"]
 
 [profile.release]
 lto = true

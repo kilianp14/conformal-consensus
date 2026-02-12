@@ -22,7 +22,7 @@ pub fn entry_derive(input: TokenStream) -> TokenStream {
     let name = &ast.ident;
     // Generate the implementation of Entry using the quote! macro
     let gen = quote! {
-        impl ::omnipaxos::storage::Entry for #name{}
+        impl ::omnipaxos::utils::Entry for #name{}
     };
 
     // Convert the generated code back into tokens and return them

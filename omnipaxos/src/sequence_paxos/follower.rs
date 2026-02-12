@@ -1,22 +1,19 @@
-use super::*;
+use crate::{
+    sequence_paxos::{messages::*, Promise, SequencePaxos},
+    utils::{Ballot, Entry, MessageStatus, NodeId, Phase, Role, SequenceNumber},
+};
+#[cfg(feature = "logging")]
+use slog::{info, trace, warn};
 
-use crate::utils::{Ballot, MessageStatus, WRITE_ERROR_MSG};
-
-impl<T, B> SequencePaxos<T, B>
+impl<T> SequencePaxos<T>
 where
     T: Entry,
-    B: Storage<T>,
 {
     /*** Follower ***/
     pub(crate) fn handle_prepare(&mut self, prep: Prepare, from: NodeId) {
         let old_promise = self.internal_storage.get_promise();
         if old_promise < prep.n || (old_promise == prep.n && self.state.1 == Phase::Recover) {
-            // Flush any pending writes
-            // Don't have to handle flushed entries here because we will sync with followers
-            let _ = self.internal_storage.flush_batch().expect(WRITE_ERROR_MSG);
-            self.internal_storage
-                .set_promise(prep.n)
-                .expect(WRITE_ERROR_MSG);
+            self.internal_storage.set_promise(prep.n);
             self.state = (Role::Follower, Phase::Prepare);
             self.current_seq_num = SequenceNumber::default();
             let na = self.internal_storage.get_accepted_round();
@@ -61,11 +58,10 @@ where
                 );
             }
             self.cached_promise_message = None;
-            let new_accepted_idx = self
-                .internal_storage
-                .sync_log(accsync.n, accsync.decided_idx, Some(accsync.log_sync))
-                .expect(WRITE_ERROR_MSG);
-            // TODO: Mode dependent?
+            self.internal_storage.set_decided_idx(accsync.decided_idx);
+            self.internal_storage.set_accepted_round(accsync.n);
+            let new_accepted_idx = self.internal_storage.sync_log(Some(accsync.log_sync));
+            // TODO: Mode dependent
             self.forward_buffered_proposals();
             let accepted = Accepted {
                 n: accsync.n,
@@ -88,14 +84,7 @@ where
     }
 
     pub(crate) fn fast_propose(&mut self, entry: T) {
-        // TODO: Send fast accept
-        let accepted_metadata = self
-            .internal_storage
-            .append_entry_with_batching(entry)
-            .expect(WRITE_ERROR_MSG);
-        if let Some(metadata) = accepted_metadata {
-            // TODO: Send (fast) accepted
-        }
+        // TODO:
     }
 
     pub(crate) fn handle_slow_accept(&mut self, slow_acc: SlowAccept<T>) {
@@ -103,41 +92,26 @@ where
             && self.state == (Role::Follower, Phase::Accept)
             && self.handle_sequence_num(slow_acc.seq_num, slow_acc.n.pid) == MessageStatus::Expected
         {
+            #[cfg(feature = "logging")]
+            {
+                let (r, p) = &self.state;
+                info!(
+                    self.logger,
+                    "Self role {:?}, phase {:?}. Incoming Slow Accept from {:?}: {:?}",
+                    r,
+                    p,
+                    slow_acc.n.pid,
+                    slow_acc
+                );
+            }
             let entries = slow_acc.entries;
-            let accept_metadata = self
-                .internal_storage
-                .append_entries_with_batching(entries)
-                .expect(WRITE_ERROR_MSG);
-            let mut new_accepted_idx = match accept_metadata {
-                Some(metadata) => Some(metadata.accepted_idx),
-                None => None,
-            };
-            let flushed_after_decide =
-                self.update_decided_idx_and_get_accepted_idx(slow_acc.decided_idx);
-            if flushed_after_decide.is_some() {
-                new_accepted_idx = flushed_after_decide;
-            }
-            if let Some(idx) = new_accepted_idx {
-                self.reply_accepted(slow_acc.n, idx);
-            }
+            let new_accepted_idx = self.internal_storage.append_entries(entries);
+            self.reply_accepted(slow_acc.n, new_accepted_idx);
         }
     }
 
     pub(crate) fn handle_fast_accept(&mut self, fast_acc: FastAccept<T>) {
-        if self.state.1 == Phase::Accept {
-            let entry = fast_acc.entry;
-            let accept_metadata = self
-                .internal_storage
-                .append_entry_with_batching(entry)
-                .expect(WRITE_ERROR_MSG);
-            let new_accepted_idx = match accept_metadata {
-                Some(metadata) => Some(metadata.accepted_idx),
-                None => None,
-            };
-            if let Some(idx) = new_accepted_idx {
-                // TODO: Send fast accepted
-            }
-        }
+        // TODO
     }
 
     pub(crate) fn handle_decide(&mut self, dec: Decide) {
@@ -145,30 +119,21 @@ where
             && self.state.1 == Phase::Accept
             && self.handle_sequence_num(dec.seq_num, dec.n.pid) == MessageStatus::Expected
         {
-            let new_accepted_idx = self.update_decided_idx_and_get_accepted_idx(dec.decided_idx);
-            if let Some(idx) = new_accepted_idx {
-                self.reply_accepted(dec.n, idx);
+            #[cfg(feature = "logging")]
+            {
+                let (r, p) = &self.state;
+                info!(
+                    self.logger,
+                    "Self role {:?}, phase {:?}. Incoming Decide from {:?}: {:?}",
+                    r,
+                    p,
+                    dec.n.pid,
+                    dec
+                );
             }
-        }
-    }
-
-    /// To maintain decided index <= accepted index, batched entries may be flushed.
-    /// Returns `Some(new_accepted_idx)` if entries are flushed, otherwise `None`.
-    fn update_decided_idx_and_get_accepted_idx(&mut self, new_decided_idx: usize) -> Option<usize> {
-        if new_decided_idx <= self.internal_storage.get_decided_idx() {
-            return None;
-        }
-        if new_decided_idx > self.internal_storage.get_accepted_idx() {
-            let new_accepted_idx = self.internal_storage.flush_batch().expect(WRITE_ERROR_MSG);
-            self.internal_storage
-                .set_decided_idx(new_decided_idx.min(new_accepted_idx))
-                .expect(WRITE_ERROR_MSG);
-            Some(new_accepted_idx)
-        } else {
-            self.internal_storage
-                .set_decided_idx(new_decided_idx)
-                .expect(WRITE_ERROR_MSG);
-            None
+            if dec.decided_idx > self.internal_storage.get_decided_idx() {
+                self.internal_storage.set_decided_idx(dec.decided_idx);
+            }
         }
     }
 
@@ -265,13 +230,5 @@ where
             n: self.internal_storage.get_promise(),
         };
         self.send_to_all_peers(PaxosMsg::PrepareReq(prepreq));
-    }
-
-    pub(crate) fn flush_batch_follower(&mut self) {
-        let accepted_idx = self.internal_storage.get_accepted_idx();
-        let new_accepted_idx = self.internal_storage.flush_batch().expect(WRITE_ERROR_MSG);
-        if new_accepted_idx > accepted_idx {
-            self.reply_accepted(self.internal_storage.get_promise(), new_accepted_idx);
-        }
     }
 }
