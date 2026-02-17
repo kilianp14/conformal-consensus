@@ -1,5 +1,5 @@
 use crate::{
-    sequence_paxos::{messages::*, Promise, SequencePaxos},
+    sequence_paxos::{messages::*, utils::LogData, Promise, SequencePaxos},
     utils::{Ballot, Entry, MessageStatus, NodeId, Phase, Role, SequenceNumber},
 };
 #[cfg(feature = "logging")]
@@ -60,7 +60,10 @@ where
             self.cached_promise_message = None;
             self.internal_storage.set_decided_idx(accsync.decided_idx);
             self.internal_storage.set_accepted_round(accsync.n);
-            let new_accepted_idx = self.internal_storage.sync_log(Some(accsync.log_sync));
+            let log_sync = accsync.log_sync;
+            let new_accepted_idx = self
+                .internal_storage
+                .append_suffix(log_sync.suffix, log_sync.sync_idx);
             // TODO: Mode dependent
             self.forward_buffered_proposals();
             let accepted = Accepted {
@@ -69,21 +72,18 @@ where
             };
             self.state = (Role::Follower, Phase::Accept);
             self.current_seq_num = accsync.seq_num;
-            let cached_idx = self.outgoing.len();
-            self.latest_accepted_meta = Some((accsync.n, cached_idx));
-
             self.send_msg_to(from, PaxosMsg::Accepted(accepted));
         }
     }
 
     fn forward_buffered_proposals(&mut self) {
         let proposals = std::mem::take(&mut self.buffered_proposals);
-        if !proposals.is_empty() {
-            self.forward_proposals(proposals);
+        for proposal in proposals {
+            self.forward_proposal(proposal);
         }
     }
 
-    pub(crate) fn fast_propose(&mut self, entry: T) {
+    pub(crate) fn fast_propose(&mut self, data: LogData<T>) {
         // TODO:
     }
 
@@ -104,9 +104,11 @@ where
                     slow_acc
                 );
             }
-            let entries = slow_acc.entries;
-            let new_accepted_idx = self.internal_storage.append_entries(entries);
-            self.reply_accepted(slow_acc.n, new_accepted_idx);
+            let accepted = Accepted {
+                n: slow_acc.n,
+                accepted_idx: self.internal_storage.append_entry(slow_acc.entry),
+            };
+            self.send_msg_to(slow_acc.n.pid, PaxosMsg::Accepted(accepted));
         }
     }
 
@@ -133,26 +135,6 @@ where
             }
             if dec.decided_idx > self.internal_storage.get_decided_idx() {
                 self.internal_storage.set_decided_idx(dec.decided_idx);
-            }
-        }
-    }
-
-    fn reply_accepted(&mut self, n: Ballot, accepted_idx: usize) {
-        match &self.latest_accepted_meta {
-            Some((round, outgoing_idx)) if round == &n => {
-                let PaxosMessage { msg, .. } = self.outgoing.get_mut(*outgoing_idx).unwrap();
-                match msg {
-                    PaxosMsg::Accepted(a) => {
-                        a.accepted_idx = accepted_idx;
-                    }
-                    _ => panic!("Cached idx is not an Accepted Message<T>!"),
-                }
-            }
-            _ => {
-                let accepted = Accepted { n, accepted_idx };
-                let cached_idx = self.outgoing.len();
-                self.latest_accepted_meta = Some((n, cached_idx));
-                self.send_msg_to(n.pid, PaxosMsg::Accepted(accepted));
             }
         }
     }

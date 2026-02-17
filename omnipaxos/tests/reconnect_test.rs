@@ -28,8 +28,8 @@ fn increasing_accept_seq_num_test() {
     let leaders_proposals: Vec<Value> = (INITIAL_PROPOSALS..INITIAL_PROPOSALS + SECOND_PROPOSALS)
         .map(Value::with_id)
         .collect();
-    // We skip seq# 1 (AcceptSync), 2 (batched initial_proposals), and 3 (decide initial_proposals)
-    let expected_seq_nums: Vec<SequenceNumber> = (4..4 + SECOND_PROPOSALS)
+    // We skip seq# 1 (AcceptSync), 2-6 (initial_proposals), and 7-11 (decide initial_proposals)
+    let expected_seq_nums: Vec<SequenceNumber> = (12..12 + SECOND_PROPOSALS)
         .map(|counter| SequenceNumber {
             session: 1,
             counter,

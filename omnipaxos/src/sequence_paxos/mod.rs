@@ -1,10 +1,13 @@
 #[cfg(feature = "logging")]
 use crate::utils::create_logger;
 use crate::{
-    sequence_paxos::log::MemoryStorage,
+    sequence_paxos::{
+        log::MemoryStorage,
+        utils::{DataId, LogData, LogSync},
+    },
     utils::{
-        defaults::DEFAULT_MODE, Ballot, Entry, FlexibleQuorum, LogSync, Mode, NodeId, Phase,
-        Quorum, Role, SequenceNumber,
+        defaults::DEFAULT_MODE, Ballot, Entry, FlexibleQuorum, Mode, NodeId, Phase, Quorum, Role,
+        SequenceNumber,
     },
     OmniPaxosConfig,
 };
@@ -18,7 +21,7 @@ mod log;
 /// The different messages used by the SequencePaxos layer
 pub mod messages;
 //mod temp;
-//mod util;
+mod utils;
 
 pub(crate) use leader::LeaderState;
 use messages::*;
@@ -77,16 +80,17 @@ where
     pid: NodeId,
     peers: Vec<NodeId>, // excluding self pid
     state: (Role, Phase),
-    buffered_proposals: Vec<T>,
+    // Used to differ between concurrent proposals of the same entry
+    data_id: DataId,
+    buffered_proposals: Vec<LogData<T>>,
     outgoing: Vec<PaxosMessage<T>>,
     leader_state: LeaderState<T>,
-    latest_accepted_meta: Option<(Ballot, usize)>,
     // Keeps track of sequence of accepts from leader where AcceptSync = 1
     current_seq_num: SequenceNumber,
-    //replicated_data: ReplicatedData<T>,
     cached_promise_message: Option<Promise<T>>,
     quorum_size: usize,
     super_quorum_size: usize,
+    // Sequence paxos operating mode (fast or default)
     pub(crate) mode: Mode,
     #[cfg(feature = "logging")]
     logger: Logger,
@@ -119,8 +123,6 @@ where
             super_quorum_size,
             num_nodes
         );
-        let max_peer_pid = peers.iter().max().unwrap();
-        let max_pid = *std::cmp::max(max_peer_pid, &pid) as usize;
         let outgoing = Vec::with_capacity(config.buffer_size);
         let mode = DEFAULT_MODE;
         let mut paxos = SequencePaxos {
@@ -129,9 +131,9 @@ where
             peers,
             state: (Role::Follower, Phase::None),
             buffered_proposals: vec![],
+            data_id: (pid, 0),
             outgoing,
-            leader_state: LeaderState::<T>::with(leader, max_pid, quorum),
-            latest_accepted_meta: None,
+            leader_state: LeaderState::<T>::with(leader, num_nodes, quorum),
             current_seq_num: SequenceNumber::default(),
             cached_promise_message: None,
             //replicated_data: ReplicatedData::<T>::with_capacity(10000),
@@ -180,25 +182,26 @@ where
 
     /// Clears and returns the outgoing messages.
     pub(crate) fn take_outgoing_messages(&mut self) -> Vec<PaxosMessage<T>> {
-        let msgs = std::mem::take(&mut self.outgoing);
-        self.leader_state.reset_latest_accept_meta();
-        self.latest_accepted_meta = None;
-        msgs
+        std::mem::take(&mut self.outgoing)
     }
 
     /// Append an entry to the replicated log.
     pub(crate) fn append(&mut self, entry: T) {
+        let data = LogData {
+            id: self.next_data_id(),
+            entry,
+        };
         match self.state {
-            (Role::Leader, Phase::Prepare) => self.buffered_proposals.push(entry),
+            (Role::Leader, Phase::Prepare) => self.buffered_proposals.push(data),
             (Role::Leader, Phase::Accept) => match self.mode {
-                Mode::OmniPaxos => self.accept_entry_leader(entry),
-                Mode::FastPaxos => self.fast_propose(entry),
+                Mode::OmniPaxos => self.accept_entry_leader(data),
+                Mode::FastPaxos => self.fast_propose(data),
             },
             (Role::Follower, Phase::Accept) => match self.mode {
-                Mode::OmniPaxos => self.forward_proposals(vec![entry]),
-                Mode::FastPaxos => self.fast_propose(entry),
+                Mode::OmniPaxos => self.forward_proposal(data),
+                Mode::FastPaxos => self.fast_propose(data),
             },
-            _ => self.forward_proposals(vec![entry]),
+            _ => self.forward_proposal(data),
         }
     }
 
@@ -220,13 +223,13 @@ where
         self.send_msg_to(pid, PaxosMsg::PrepareReq(prepreq));
     }
 
-    pub(crate) fn forward_proposals(&mut self, mut entries: Vec<T>) {
+    pub(crate) fn forward_proposal(&mut self, entry: LogData<T>) {
         let leader = self.get_current_leader();
         if leader > 0 && self.pid != leader {
-            let pf = PaxosMsg::ProposalForward(entries);
+            let pf = PaxosMsg::ProposalForward(entry);
             self.send_msg_to(leader, pf);
         } else {
-            self.buffered_proposals.append(&mut entries);
+            self.buffered_proposals.push(entry);
         }
     }
 
@@ -238,6 +241,11 @@ where
             suffix: self.internal_storage.get_suffix(common_prefix_idx),
             sync_idx: common_prefix_idx,
         }
+    }
+
+    fn next_data_id(&mut self) -> DataId {
+        self.data_id.1 += 1;
+        self.data_id
     }
 
     pub(crate) fn send_msg_to(&mut self, pid: NodeId, msg: PaxosMsg<T>) {
@@ -275,7 +283,7 @@ where
             PaxosMsg::NotAccepted(not_acc) => self.handle_notaccepted(not_acc, m.from),
             PaxosMsg::Accepted(accepted) => self.handle_accepted(accepted, m.from),
             PaxosMsg::Decide(d) => self.handle_decide(d),
-            PaxosMsg::ProposalForward(proposals) => self.handle_forwarded_proposal(proposals),
+            PaxosMsg::ProposalForward(proposal) => self.handle_forwarded_proposal(proposal),
         }
     }
 }

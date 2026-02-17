@@ -1,4 +1,7 @@
-use crate::utils::{Ballot, Entry, LogSync, NodeId, SequenceNumber};
+use crate::{
+    sequence_paxos::utils::{LogData, LogSync},
+    utils::{Ballot, Entry, NodeId, SequenceNumber},
+};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
@@ -74,10 +77,8 @@ where
     pub n: Ballot,
     /// The sequence number of this message in the leader-to-follower accept sequence
     pub seq_num: SequenceNumber,
-    /// The decided index.
-    pub decided_idx: usize,
-    /// Entries to be replicated.
-    pub entries: Vec<T>,
+    /// Entry to be replicated.
+    pub entry: LogData<T>,
 }
 
 /// Message with entries to be replicated and the latest decided index sent by the leader in the accept phase.
@@ -90,7 +91,7 @@ where
     /// The current round.
     pub n: Ballot,
     /// Entry to be replicated.
-    pub entry: T,
+    pub entry: LogData<T>,
 }
 
 /// Message sent by follower to leader when entries has been accepted.
@@ -144,7 +145,7 @@ where
     NotAccepted(NotAccepted),
     Decide(Decide),
     /// Forward client proposals to the leader.
-    ProposalForward(Vec<T>),
+    ProposalForward(LogData<T>),
 }
 
 /// A struct for a Paxos message that also includes sender and receiver.

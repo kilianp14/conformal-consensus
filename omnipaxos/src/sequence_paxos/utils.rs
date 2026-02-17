@@ -1,9 +1,66 @@
-use crate::{storage::Entry, utils::NodeId};
+use crate::utils::{Ballot, Entry, NodeId};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::cmp::Ordering;
 
-pub(crate) type DataId = (NodeId, usize);
+/// Promise without the log update
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PromiseMetaData {
+    pub n_accepted: Ballot,
+    pub accepted_idx: usize,
+    pub decided_idx: usize,
+    pub pid: NodeId,
+}
+
+impl PartialOrd for PromiseMetaData {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        let ordering = if self.n_accepted == other.n_accepted
+            && self.accepted_idx == other.accepted_idx
+            && self.pid == other.pid
+        {
+            Ordering::Equal
+        } else if self.n_accepted > other.n_accepted
+            || (self.n_accepted == other.n_accepted && self.accepted_idx > other.accepted_idx)
+        {
+            Ordering::Greater
+        } else {
+            Ordering::Less
+        };
+        Some(ordering)
+    }
+}
+
+impl PartialEq for PromiseMetaData {
+    fn eq(&self, other: &Self) -> bool {
+        self.n_accepted == other.n_accepted
+            && self.accepted_idx == other.accepted_idx
+            && self.pid == other.pid
+    }
+}
+
+pub type DataId = (NodeId, u64);
+
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct LogData<T: Entry> {
+    pub id: DataId,
+    pub entry: T,
+}
+
+/// Struct used to help another server synchronize their log with the current state of our own log.
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct LogSync<T>
+where
+    T: Entry,
+{
+    /// The log suffix.
+    pub suffix: Vec<LogData<T>>,
+    /// The index of the log where the entries from `suffix` should be applied at (also the compacted idx of `decided_snapshot` if it exists).
+    pub sync_idx: usize,
+}
+
+/*
 pub(crate) type SlotIdx = usize;
 
 #[derive(Copy, Clone, Debug, Ord, PartialEq, Eq, Hash)]
@@ -144,13 +201,6 @@ impl<T: Entry> ReplicatedData<T> {
     pub fn insert(&mut self, data_id: DataId, data: Data<T>) {
         self.0.insert(data_id, data);
     }
-
-    /*
-    // TODO need some GC?
-    pub fn remove(&mut self, data_id: &DataId) -> Option<Data<T>> {
-        self.0.remove(data_id)
-    }
-    */
 }
 
 #[derive(Debug, Clone, Default)]
@@ -310,3 +360,4 @@ pub struct SlotEntries<T> {
     pub(crate) completed_entries: Vec<T>,
     pub(crate) completed_idx: SlotIdx,
 }
+*/

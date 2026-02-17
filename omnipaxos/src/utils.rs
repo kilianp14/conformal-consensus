@@ -9,19 +9,6 @@ use std::{fs::OpenOptions, sync::Mutex};
 /// Type of the entries stored in the log.
 pub trait Entry: Clone + Debug {}
 
-/// Struct used to help another server synchronize their log with the current state of our own log.
-#[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct LogSync<T>
-where
-    T: Entry,
-{
-    /// The log suffix.
-    pub suffix: Vec<T>,
-    /// The index of the log where the entries from `suffix` should be applied at (also the compacted idx of `decided_snapshot` if it exists).
-    pub sync_idx: usize,
-}
-
 /// The entry read in the log.
 #[derive(Debug, Clone)]
 pub enum LogEntry<T>
@@ -214,41 +201,6 @@ pub(crate) enum Role {
 pub(crate) enum Mode {
     FastPaxos,
     OmniPaxos,
-}
-
-/// Promise without the log update
-#[derive(Debug, Clone, Default)]
-pub(crate) struct PromiseMetaData {
-    pub n_accepted: Ballot,
-    pub accepted_idx: usize,
-    pub decided_idx: usize,
-    pub pid: NodeId,
-}
-
-impl PartialOrd for PromiseMetaData {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        let ordering = if self.n_accepted == other.n_accepted
-            && self.accepted_idx == other.accepted_idx
-            && self.pid == other.pid
-        {
-            Ordering::Equal
-        } else if self.n_accepted > other.n_accepted
-            || (self.n_accepted == other.n_accepted && self.accepted_idx > other.accepted_idx)
-        {
-            Ordering::Greater
-        } else {
-            Ordering::Less
-        };
-        Some(ordering)
-    }
-}
-
-impl PartialEq for PromiseMetaData {
-    fn eq(&self, other: &Self) -> bool {
-        self.n_accepted == other.n_accepted
-            && self.accepted_idx == other.accepted_idx
-            && self.pid == other.pid
-    }
 }
 
 /// Creates an asynchronous logger which outputs to both the terminal and a specified file_path.

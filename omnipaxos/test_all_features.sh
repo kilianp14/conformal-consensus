@@ -4,23 +4,23 @@
 # Usage: ./test_all_features.sh [-c], -c runs cargo check instead of cargo test
 
 # Define an array of feature names
-features=("macros" "logging" "toml_config" "unicache")
+features=("macros" "logging" "toml_config")
 
 # Initialize a variable to track whether to run the tests or not
 check_only=false
 
 # Process command line arguments
 while [[ $# -gt 0 ]]; do
-    case "$1" in
-        -c)
-            check_only=true
-            shift
-            ;;
-        *)
-            echo "Invalid argument: $1"
-            exit 1
-            ;;
-    esac
+  case "$1" in
+  -c)
+    check_only=true
+    shift
+    ;;
+  *)
+    echo "Invalid argument: $1"
+    exit 1
+    ;;
+  esac
 done
 
 # Get the total number of features
@@ -34,36 +34,36 @@ failing_combinations=""
 
 # Loop through all possible feature combinations
 for ((i = 1; i < total_combinations; i++)); do
-    feature_flags="--features "
+  feature_flags="--features "
 
-    # Generate feature flags for the current combination
-    for ((j = 0; j < num_features; j++)); do
-        if (( (i >> j) & 1 )); then
-            feature_flags+="${features[j]},"
-        fi
-    done
-
-    if [ "$check_only" = true ]; then
-        # Run cargo check with the current feature combination
-        echo "Checking with features: ${feature_flags}"
-        cargo check --no-default-features $feature_flags
-    else
-        # Run cargo test with the current feature combination
-        echo "Testing with features: ${feature_flags}"
-        cargo test --no-default-features $feature_flags
+  # Generate feature flags for the current combination
+  for ((j = 0; j < num_features; j++)); do
+    if (((i >> j) & 1)); then
+      feature_flags+="${features[j]},"
     fi
+  done
 
-    # Check if cargo test failed
-    if [ $? -ne 0 ]; then
-        echo "Cargo failed with combination ${feature_flags}"
-        failing_combinations+="\n${feature_flags}"
-    fi
+  if [ "$check_only" = true ]; then
+    # Run cargo check with the current feature combination
+    echo "Checking with features: ${feature_flags}"
+    cargo check --no-default-features $feature_flags
+  else
+    # Run cargo test with the current feature combination
+    echo "Testing with features: ${feature_flags}"
+    cargo test --no-default-features $feature_flags
+  fi
+
+  # Check if cargo test failed
+  if [ $? -ne 0 ]; then
+    echo "Cargo failed with combination ${feature_flags}"
+    failing_combinations+="\n${feature_flags}"
+  fi
 done
 
 # Check if any combination failed and print the failing combinations
 if [ -n "$failing_combinations" ]; then
-    echo -e "Failed feature combinations:$failing_combinations"
-    exit 1
+  echo -e "Failed feature combinations:$failing_combinations"
+  exit 1
 fi
 
 echo "All feature combinations tested successfully!"
