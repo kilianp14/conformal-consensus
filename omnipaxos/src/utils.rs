@@ -197,9 +197,12 @@ pub(crate) enum Role {
     Leader,
 }
 
+/// Operating Mode of SequencePaxos
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Mode {
+pub enum Mode {
+    /// FastPaxos based
     FastPaxos,
+    /// OmniPaxos based
     OmniPaxos,
 }
 

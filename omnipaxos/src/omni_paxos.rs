@@ -2,7 +2,7 @@ use crate::{
     errors::{valid_config, ConfigError},
     leader_election::BallotLeaderElection,
     messages::Message,
-    predictor::ConformalModePredictor,
+    predictor::{AlwaysOmniPaxosMode, ModeSetter},
     sequence_paxos::SequencePaxos,
     utils::{
         defaults::{BUFFER_SIZE, ELECTION_TIMEOUT, RESEND_MESSAGE_TIMEOUT},
@@ -67,7 +67,7 @@ impl OmniPaxosConfig {
             resend_message_clock: LogicalClock::with(
                 self.server_config.resend_message_tick_timeout,
             ),
-            mode_predictor: ConformalModePredictor {},
+            mode_setter: Box::new(AlwaysOmniPaxosMode {}),
             seq_paxos: SequencePaxos::with(self.into()),
         })
     }
@@ -208,7 +208,7 @@ where
 {
     seq_paxos: SequencePaxos<T>,
     ble: BallotLeaderElection,
-    mode_predictor: ConformalModePredictor,
+    mode_setter: Box<dyn ModeSetter + Send + 'static>,
     election_clock: LogicalClock,
     resend_message_clock: LogicalClock,
 }
@@ -285,7 +285,7 @@ where
 
     /// Append an entry to the replicated log.
     pub fn append(&mut self, entry: T) {
-        self.seq_paxos.mode = self.mode_predictor.get_new_mode();
+        self.seq_paxos.mode = self.mode_setter.get_new_mode();
         self.seq_paxos.append(entry)
     }
 
