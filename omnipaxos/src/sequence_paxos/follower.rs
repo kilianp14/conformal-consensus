@@ -1,9 +1,9 @@
 use crate::{
-    sequence_paxos::{messages::*, utils::LogData, Promise, SequencePaxos},
+    sequence_paxos::{messages::*, Promise, SequencePaxos},
     utils::{Ballot, Entry, MessageStatus, NodeId, Phase, Role, SequenceNumber},
 };
 #[cfg(feature = "logging")]
-use slog::{info, trace, warn};
+use slog::{debug, info, trace, warn};
 
 impl<T> SequencePaxos<T>
 where
@@ -48,7 +48,7 @@ where
             #[cfg(feature = "logging")]
             {
                 let (r, p) = &self.state;
-                info!(
+                debug!(
                     self.logger,
                     "Self role {:?}, phase {:?}. Incoming Accept Sync from {:?}: {:?}",
                     r,
@@ -72,7 +72,7 @@ where
             };
             self.state = (Role::Follower, Phase::Accept);
             self.current_seq_num = accsync.seq_num;
-            self.send_msg_to(from, PaxosMsg::Accepted(accepted));
+            self.send_msg_to(from, PaxosMsg::OpAccepted(accepted));
         }
     }
 
@@ -83,36 +83,47 @@ where
         }
     }
 
-    pub(crate) fn fast_propose(&mut self, data: LogData<T>) {
-        // TODO:
-    }
-
-    pub(crate) fn handle_slow_accept(&mut self, slow_acc: SlowAccept<T>) {
-        if self.check_valid_ballot(slow_acc.n)
+    pub(crate) fn handle_op_accept(&mut self, op_acc: Accept<T>) {
+        if self.check_valid_ballot(op_acc.n)
             && self.state == (Role::Follower, Phase::Accept)
-            && self.handle_sequence_num(slow_acc.seq_num, slow_acc.n.pid) == MessageStatus::Expected
+            && self.handle_sequence_num(op_acc.seq_num, op_acc.n.pid) == MessageStatus::Expected
         {
             #[cfg(feature = "logging")]
             {
                 let (r, p) = &self.state;
-                info!(
+                debug!(
                     self.logger,
                     "Self role {:?}, phase {:?}. Incoming Slow Accept from {:?}: {:?}",
                     r,
                     p,
-                    slow_acc.n.pid,
-                    slow_acc
+                    op_acc.n.pid,
+                    op_acc
                 );
             }
+            self.internal_storage
+                .insert_at_index(op_acc.accepted_idx, op_acc.entry);
             let accepted = Accepted {
-                n: slow_acc.n,
-                accepted_idx: self.internal_storage.append_entry(slow_acc.entry),
+                n: op_acc.n,
+                accepted_idx: op_acc.accepted_idx,
             };
-            self.send_msg_to(slow_acc.n.pid, PaxosMsg::Accepted(accepted));
+            self.send_msg_to(op_acc.n.pid, PaxosMsg::OpAccepted(accepted));
         }
     }
 
-    pub(crate) fn handle_fast_accept(&mut self, fast_acc: FastAccept<T>) {
+    pub(crate) fn handle_fp_propose(&mut self, fast_proposal: FpPropose<T>) {
+        // TODO
+        #[cfg(feature = "logging")]
+        {
+            let (r, p) = &self.state;
+            debug!(
+                self.logger,
+                "Self role {:?}, phase {:?}. Incoming fast proposal: {:?}", r, p, fast_proposal
+            );
+        }
+        if self.state.1 == Phase::Accept {}
+    }
+
+    pub(crate) fn handle_fp_slow_accept(&mut self, slow_acc: Accept<T>) {
         // TODO
     }
 
@@ -124,7 +135,7 @@ where
             #[cfg(feature = "logging")]
             {
                 let (r, p) = &self.state;
-                info!(
+                debug!(
                     self.logger,
                     "Self role {:?}, phase {:?}. Incoming Decide from {:?}: {:?}",
                     r,

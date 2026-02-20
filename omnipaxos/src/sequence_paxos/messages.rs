@@ -1,6 +1,6 @@
 use crate::{
-    sequence_paxos::utils::{LogData, LogSync},
-    utils::{Ballot, Entry, NodeId, SequenceNumber},
+    sequence_paxos::utils::{LogSync, SlotId},
+    utils::{Ballot, Entry, EntryId, LogEntry, NodeId, SequenceNumber},
 };
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -21,11 +21,7 @@ pub struct Prepare {
     /// The current round.
     pub n: Ballot,
     /// The decided index of this leader.
-    pub decided_idx: usize,
-    /// The latest round in which an entry was accepted.
-    pub n_accepted: Ballot,
-    /// The log length of this leader.
-    pub accepted_idx: usize,
+    pub decided_idx: SlotId,
 }
 
 /// Promise message sent by a follower in response to a [`Prepare`] sent by the leader.
@@ -37,18 +33,13 @@ where
 {
     /// The current round.
     pub n: Ballot,
-    /// The latest round in which an entry was accepted.
-    pub n_accepted: Ballot,
-    /// The decided index of this follower.
-    pub decided_idx: usize,
-    /// The log length of this follower.
-    pub accepted_idx: usize,
-    /// The log update which the leader applies to its log in order to sync
-    /// with this follower (if the follower is more up-to-date).
+    /// The decided index of this leader.
+    pub decided_idx: SlotId,
+    /// For log syncing
     pub log_sync: Option<LogSync<T>>,
 }
 
-/// AcceptSync message sent by the leader to synchronize the logs of all replicas in the prepare phase.
+/// AcceptSync message sent by the leader to add missing decided entries to the logs of all replicas in the prepare phase.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct AcceptSync<T>
@@ -59,17 +50,15 @@ where
     pub n: Ballot,
     /// The sequence number of this message in the leader-to-follower accept sequence
     pub seq_num: SequenceNumber,
-    /// The decided index
-    pub decided_idx: usize,
-    /// The log update which the follower applies to its log in order to sync
-    /// with the leader.
-    pub log_sync: LogSync<T>,
+    /// The missing decided entries of the follower
+    pub missing_decided: Vec<T>,
 }
 
-/// Message with entries to be replicated and the latest decided index sent by the leader in the accept phase.
+/// Message with entry to be replicated sent by the leader in accept phase of OmniPaxos or
+/// in FastPaxos indicating a Slow path.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct SlowAccept<T>
+pub struct Accept<T>
 where
     T: Entry,
 {
@@ -78,42 +67,65 @@ where
     /// The sequence number of this message in the leader-to-follower accept sequence
     pub seq_num: SequenceNumber,
     /// Entry to be replicated.
-    pub entry: LogData<T>,
+    pub entry: (EntryId, T),
+    /// The index to place the entry.
+    pub slot_idx: SlotId,
 }
 
-/// Message with entries to be replicated and the latest decided index sent by the leader in the accept phase.
-#[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct FastAccept<T>
-where
-    T: Entry,
-{
-    /// The current round.
-    pub n: Ballot,
-    /// Entry to be replicated.
-    pub entry: LogData<T>,
-}
-
-/// Message sent by follower to leader when entries has been accepted.
+/// Message sent by follower to leader when entry has been accepted in OmniPaxos or in a slow round
+/// in FastPaxos.
 #[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Accepted {
     /// The current round.
     pub n: Ballot,
-    /// The accepted index.
-    pub accepted_idx: usize,
+    /// The index where the entry was placed.
+    pub slot_idx: SlotId,
+}
+
+/// Message with entry proposed to be replicated in FastPaxos broadcasted to all nodes.
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct FpPropose<T>
+where
+    T: Entry,
+{
+    /// Entry to be replicated.
+    pub entry: (EntryId, T),
+    /// The index to place the entry.
+    pub slot_idx: SlotId,
+}
+
+/// Message sent by a follower to leader in FastPaxos when entry has been accepted in fast round
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct FpFastAccepted<T>
+where
+    T: Entry,
+{
+    /// The current round.
+    pub n: Ballot,
+    /// Entry to be replicated.
+    pub entry: (EntryId, T),
+    /// The index to place the entry.
+    pub slot_idx: SlotId,
 }
 
 /// Message sent by leader to followers to decide up to a certain index in the log.
 #[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct Decide {
+pub struct Decide<T>
+where
+    T: Entry,
+{
     /// The current round.
     pub n: Ballot,
     /// The sequence number of this message in the leader-to-follower accept sequence
     pub seq_num: SequenceNumber,
-    /// The decided index.
-    pub decided_idx: usize,
+    /// Entry to be decided.
+    pub entry: T,
+    /// The index to place the decided entry.
+    pub decided_idx: SlotId,
 }
 
 /// Message sent by follower to leader when accepting an entry is rejected.
@@ -133,19 +145,27 @@ pub enum PaxosMsg<T>
 where
     T: Entry,
 {
-    /// Request a [`Prepare`] to be sent from the leader. Used for fail-recovery.
+    // Log reconciliation
     PrepareReq(PrepareReq),
     #[allow(missing_docs)]
     Prepare(Prepare),
     Promise(Promise<T>),
     AcceptSync(AcceptSync<T>),
-    SlowAccept(SlowAccept<T>),
-    FastAccept(FastAccept<T>),
-    Accepted(Accepted),
+
+    // OmniPaxos Messages
+    OpProposalForward(EntryId, T),
+    OpAccept(Accept<T>),
+    OpAccepted(Accepted),
+
+    // FastPaxos Messages
+    FpPropose(FpPropose<T>),
+    FpFastAccepted(FpFastAccepted<T>),
+    FpSlowAccept(Accept<T>),
+    FpSlowAccepted(Accepted),
+
+    // Shared Messages
     NotAccepted(NotAccepted),
-    Decide(Decide),
-    /// Forward client proposals to the leader.
-    ProposalForward(LogData<T>),
+    Decide(Decide<T>),
 }
 
 /// A struct for a Paxos message that also includes sender and receiver.

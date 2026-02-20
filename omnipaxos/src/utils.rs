@@ -6,26 +6,48 @@ use std::{cmp::Ordering, fmt::Debug};
 #[cfg(feature = "logging")]
 use std::{fs::OpenOptions, sync::Mutex};
 
+/// ID for an OmniPaxos node
+pub type NodeId = u64;
+
 /// Type of the entries stored in the log.
 pub trait Entry: Clone + Debug {}
 
+/// Id for an entry
+pub type EntryId = (NodeId, u64);
+
+/// The status of an Undecided entry in the log
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum SlotStatus {
+    /// Slot contains an entry accepted from the leader in OmniPaxos
+    OpAccepted,
+    /// Slot contains an entry accepted via the fast path of FastPaxos
+    FpFastAccepted,
+    /// Slot contains an entry accepted via the slow path of FastPaxos
+    FpSlowAccepted,
+}
+
 /// The entry read in the log.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum LogEntry<T>
 where
     T: Entry,
 {
     /// The entry is decided.
     Decided(T),
-    /// The entry is NOT decided. Might be removed from the log at a later time.
-    Undecided(T),
+    /// The entry is NOT decided. Might be removed from log at later time. Empty slots possible
+    Undecided(EntryId, T, SlotStatus),
+    /// Slot is currently empty
+    Empty,
 }
 
 impl<T: PartialEq + Entry> PartialEq for LogEntry<T> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (LogEntry::Decided(v1), LogEntry::Decided(v2)) => v1 == v2,
-            (LogEntry::Undecided(v1), LogEntry::Undecided(v2)) => v1 == v2,
+            (LogEntry::Empty, LogEntry::Empty) => true,
+            (LogEntry::Undecided(id1, _, _), LogEntry::Undecided(id2, _, _)) => id1 == id2,
             _ => false,
         }
     }
@@ -40,9 +62,6 @@ pub(crate) mod defaults {
     pub(crate) const RESEND_MESSAGE_TIMEOUT: u64 = 100;
     pub(crate) const DEFAULT_MODE: Mode = Mode::OmniPaxos;
 }
-
-/// ID for an OmniPaxos node
-pub type NodeId = u64;
 
 /// Used for checking the ordering of message sequences in the accept phase
 #[derive(PartialEq, Eq)]
@@ -199,6 +218,7 @@ pub(crate) enum Role {
 
 /// Operating Mode of SequencePaxos
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum Mode {
     /// FastPaxos based
     FastPaxos,

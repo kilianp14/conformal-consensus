@@ -1,13 +1,10 @@
 #[cfg(feature = "logging")]
 use crate::utils::create_logger;
 use crate::{
-    sequence_paxos::{
-        log::MemoryStorage,
-        utils::{DataId, LogData, LogSync},
-    },
+    sequence_paxos::{log::MemoryStorage, utils::LeaderState},
     utils::{
-        defaults::DEFAULT_MODE, Ballot, Entry, FlexibleQuorum, Mode, NodeId, Phase, Quorum, Role,
-        SequenceNumber,
+        defaults::DEFAULT_MODE, Ballot, Entry, EntryId, FlexibleQuorum, LogEntry, Mode, NodeId,
+        Phase, Quorum, Role, SequenceNumber, SlotStatus,
     },
     OmniPaxosConfig,
 };
@@ -23,7 +20,6 @@ pub mod messages;
 //mod temp;
 mod utils;
 
-pub(crate) use leader::LeaderState;
 use messages::*;
 //use util::ReplicatedData;
 
@@ -81,15 +77,13 @@ where
     peers: Vec<NodeId>, // excluding self pid
     state: (Role, Phase),
     // Used to differ between concurrent proposals of the same entry
-    data_id: DataId,
-    buffered_proposals: Vec<LogData<T>>,
+    entry_id: EntryId,
+    buffered_proposals: Vec<(EntryId, T)>,
     outgoing: Vec<PaxosMessage<T>>,
     leader_state: LeaderState<T>,
     // Keeps track of sequence of accepts from leader where AcceptSync = 1
     current_seq_num: SequenceNumber,
     cached_promise_message: Option<Promise<T>>,
-    quorum_size: usize,
-    super_quorum_size: usize,
     // Sequence paxos operating mode (fast or default)
     pub(crate) mode: Mode,
     #[cfg(feature = "logging")]
@@ -131,14 +125,12 @@ where
             peers,
             state: (Role::Follower, Phase::None),
             buffered_proposals: vec![],
-            data_id: (pid, 0),
+            entry_id: (pid, 0),
             outgoing,
-            leader_state: LeaderState::<T>::with(leader, num_nodes, quorum),
+            leader_state: LeaderState::<T>::with(leader, num_nodes, quorum_size, super_quorum_size),
             current_seq_num: SequenceNumber::default(),
             cached_promise_message: None,
             //replicated_data: ReplicatedData::<T>::with_capacity(10000),
-            quorum_size,
-            super_quorum_size,
             mode,
             #[cfg(feature = "logging")]
             logger: {
@@ -187,26 +179,33 @@ where
 
     /// Append an entry to the replicated log.
     pub(crate) fn append(&mut self, entry: T) {
-        let data = LogData {
-            id: self.next_data_id(),
-            entry,
-        };
+        let entry_id = self.next_data_id();
         match self.state {
-            (Role::Leader, Phase::Prepare) => self.buffered_proposals.push(data),
             (Role::Leader, Phase::Accept) => match self.mode {
-                Mode::OmniPaxos => self.accept_entry_leader(data),
-                Mode::FastPaxos => self.fast_propose(data),
+                Mode::OmniPaxos => self.op_accept_entry_leader((entry_id, entry)),
+                Mode::FastPaxos => self.fp_fast_propose((entry_id, entry)),
             },
             (Role::Follower, Phase::Accept) => match self.mode {
-                Mode::OmniPaxos => self.forward_proposal(data),
-                Mode::FastPaxos => self.fast_propose(data),
+                Mode::OmniPaxos => self.op_forward_proposal((entry_id, entry)),
+                Mode::FastPaxos => self.fp_fast_propose((entry_id, entry)),
             },
-            _ => self.forward_proposal(data),
+            _ => self.buffered_proposals.push((entry_id, entry)),
         }
     }
 
     fn get_current_leader(&self) -> NodeId {
         self.internal_storage.get_promise().pid
+    }
+
+    fn fp_fast_propose(&mut self, entry: (EntryId, T)) {
+        let slot_idx = self.internal_storage.add_entry(LogEntry::Undecided(
+            entry.0,
+            entry.1.clone(),
+            SlotStatus::FpFastAccepted,
+        ));
+        let fp = FpPropose { entry, slot_idx };
+        self.send_to_all_peers(PaxosMsg::FpPropose(fp));
+        // TODO: Handle leader interaction
     }
 
     /// Handles re-establishing a connection to a previously disconnected peer.
@@ -223,29 +222,19 @@ where
         self.send_msg_to(pid, PaxosMsg::PrepareReq(prepreq));
     }
 
-    pub(crate) fn forward_proposal(&mut self, entry: LogData<T>) {
+    pub(crate) fn op_forward_proposal(&mut self, entry: (EntryId, T)) {
         let leader = self.get_current_leader();
         if leader > 0 && self.pid != leader {
-            let pf = PaxosMsg::ProposalForward(entry);
+            let pf = PaxosMsg::OpProposalForward(entry.0, entry.1.clone());
             self.send_msg_to(leader, pf);
         } else {
             self.buffered_proposals.push(entry);
         }
     }
 
-    /// Returns `LogSync`, a struct to help other servers synchronize their log to correspond to the
-    /// current state of our own log. The `common_prefix_idx` marks where in the log the other server
-    /// needs to be sync from.
-    fn create_log_sync(&self, common_prefix_idx: usize) -> LogSync<T> {
-        LogSync {
-            suffix: self.internal_storage.get_suffix(common_prefix_idx),
-            sync_idx: common_prefix_idx,
-        }
-    }
-
-    fn next_data_id(&mut self) -> DataId {
-        self.data_id.1 += 1;
-        self.data_id
+    fn next_data_id(&mut self) -> EntryId {
+        self.entry_id.1 += 1;
+        self.entry_id
     }
 
     pub(crate) fn send_msg_to(&mut self, pid: NodeId, msg: PaxosMsg<T>) {
@@ -270,6 +259,7 @@ where
     /// Handle an incoming message.
     pub(crate) fn handle(&mut self, m: PaxosMessage<T>) {
         match m.msg {
+            // Prepare Phase
             PaxosMsg::PrepareReq(prepreq) => self.handle_preparereq(prepreq, m.from),
             PaxosMsg::Prepare(prep) => self.handle_prepare(prep, m.from),
             PaxosMsg::Promise(prom) => match &self.state {
@@ -278,12 +268,23 @@ where
                 _ => {}
             },
             PaxosMsg::AcceptSync(acc_sync) => self.handle_acceptsync(acc_sync, m.from),
-            PaxosMsg::SlowAccept(slow_acc) => self.handle_slow_accept(slow_acc),
-            PaxosMsg::FastAccept(fast_acc) => self.handle_fast_accept(fast_acc),
+
+            // OmniPaxos
+            PaxosMsg::OpProposalForward(entry_id, entry) => {
+                self.handle_op_forwarded_proposal((entry_id, entry))
+            }
+            PaxosMsg::OpAccept(op_acc) => self.handle_op_accept(op_acc),
+            PaxosMsg::OpAccepted(op_accepted) => self.handle_op_accepted(op_accepted, m.from),
+
+            // FastPaxos
+            PaxosMsg::FpPropose(fast_proposal) => self.handle_fp_propose(fast_proposal),
+            PaxosMsg::FpFastAccepted(fast_accepted) => self.handle_fp_fast_accepted(fast_accepted),
+            PaxosMsg::FpSlowAccept(slow_acc) => self.handle_fp_slow_accept(slow_acc),
+            PaxosMsg::FpSlowAccepted(slow_accepted) => self.handle_fp_slow_accepted(slow_accepted),
+
+            // Shared
             PaxosMsg::NotAccepted(not_acc) => self.handle_notaccepted(not_acc, m.from),
-            PaxosMsg::Accepted(accepted) => self.handle_accepted(accepted, m.from),
             PaxosMsg::Decide(d) => self.handle_decide(d),
-            PaxosMsg::ProposalForward(proposal) => self.handle_forwarded_proposal(proposal),
         }
     }
 }
