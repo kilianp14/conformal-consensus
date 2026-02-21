@@ -1,6 +1,6 @@
 use crate::{
     sequence_paxos::utils::{LogSync, SlotId},
-    utils::{Ballot, Entry, EntryId, LogEntry, NodeId, SequenceNumber},
+    utils::{Ballot, Entry, EntryId, NodeId, SequenceNumber},
 };
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -33,13 +33,16 @@ where
 {
     /// The current round.
     pub n: Ballot,
-    /// The decided index of this leader.
+    /// The latest round in which an entry was accepted.
+    pub n_accepted: Ballot,
+    /// The decided index of this follower.
     pub decided_idx: SlotId,
-    /// For log syncing
-    pub log_sync: Option<LogSync<T>>,
+    /// The log update which the leader applies to its log in order to sync
+    /// with this follower (if the follower is more up-to-date).
+    pub log_sync: LogSync<T>,
 }
 
-/// AcceptSync message sent by the leader to add missing decided entries to the logs of all replicas in the prepare phase.
+/// AcceptSync message sent by the leader to synchronize the logs of all replicas in the prepare phase.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct AcceptSync<T>
@@ -50,8 +53,11 @@ where
     pub n: Ballot,
     /// The sequence number of this message in the leader-to-follower accept sequence
     pub seq_num: SequenceNumber,
-    /// The missing decided entries of the follower
-    pub missing_decided: Vec<T>,
+    /// The decided index
+    pub decided_idx: SlotId,
+    /// The log update which the follower applies to its log in order to sync
+    /// with the leader.
+    pub log_sync: LogSync<T>,
 }
 
 /// Message with entry to be replicated sent by the leader in accept phase of OmniPaxos or

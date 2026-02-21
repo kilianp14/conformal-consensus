@@ -19,6 +19,8 @@ where
     empty_slots: BTreeSet<SlotId>,
     /// Last promised round.
     promise: Ballot,
+    /// Last accepted round.
+    accepted_round: Ballot,
     /// Length of the decided log.
     decided_idx: SlotId,
 }
@@ -32,6 +34,7 @@ where
             log: Vec::new(),
             empty_slots: BTreeSet::new(),
             promise: Ballot::default(),
+            accepted_round: Ballot::default(),
             decided_idx: 0,
         }
     }
@@ -136,5 +139,13 @@ where
 
     pub(crate) fn get_decided_idx(&self) -> usize {
         self.decided_idx
+    }
+
+    pub(crate) fn set_accepted_round(&mut self, bal: Ballot) {
+        self.accepted_round = bal;
+    }
+
+    pub(crate) fn get_accepted_round(&self) -> Ballot {
+        self.accepted_round
     }
 }

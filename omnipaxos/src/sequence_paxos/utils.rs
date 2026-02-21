@@ -24,8 +24,8 @@ pub(crate) enum PromiseState {
     /// Not promised to any leader
     #[default]
     NotPromised,
-    /// Promised to my ballot with decided index
-    Promised(SlotId),
+    /// Promised to my ballot with accepted round and decided_idx
+    Promised(Ballot, SlotId),
     /// Promised to a leader who's ballot is greater than mine
     PromisedHigher,
 }
@@ -53,18 +53,18 @@ where
     pub(crate) n_leader: Ballot,
     // Promises from followers
     promises_meta: HashMap<NodeId, PromiseState>,
+    // Log syncs from followers
+    log_syncs: HashMap<NodeId, LogSync<T>>,
     // The sequence number of accepts for each follower
     follower_seq_nums: HashMap<NodeId, SequenceNumber>,
     // Mapping between entry ids and entries
     entries: HashMap<EntryId, T>,
     // Stores proposals by slot and node
     accept_meta: HashMap<SlotId, HashMap<NodeId, (EntryId, SlotStatus)>>,
-    // 
-    proposal_results: BTreeMap<>
     // Majority quorum size
-    quorum_size: usize,
+    pub(crate) quorum_size: usize,
     // Fast quorum size
-    super_quorum_size: usize,
+    pub(crate) super_quorum_size: usize,
 }
 
 impl<T> LeaderState<T>
@@ -80,6 +80,7 @@ where
         Self {
             n_leader,
             promises_meta: HashMap::with_capacity(n_nodes),
+            log_syncs: HashMap::with_capacity(n_nodes),
             accept_meta: HashMap::new(),
             entries: HashMap::new(),
             follower_seq_nums: HashMap::with_capacity(n_nodes),
@@ -104,13 +105,21 @@ where
     pub(crate) fn get_promised_count(&self) -> usize {
         self.promises_meta
             .values()
-            .filter(|m| matches!(m, PromiseState::Promised(_)))
+            .filter(|m| matches!(m, PromiseState::Promised(_, _)))
             .count()
     }
 
-    pub(crate) fn set_promise(&mut self, pid: NodeId, decided_idx: SlotId) -> bool {
+    pub(crate) fn set_promise(
+        &mut self,
+        from: NodeId,
+        accepted_round: Ballot,
+        decided_idx: SlotId,
+        log_sync: LogSync<T>,
+    ) -> bool {
         self.promises_meta
-            .insert(pid, PromiseState::Promised(decided_idx));
+            .insert(from, PromiseState::Promised(accepted_round, decided_idx));
+        // all of the followers log-syncs start directly after the leaders decided_idx
+        self.log_syncs.insert(from, log_sync);
         let num_promised = self.get_promised_count();
         num_promised >= self.quorum_size
     }
@@ -122,6 +131,131 @@ where
     /// Node `pid` seen with ballot greater than my ballot
     pub(crate) fn lost_promise(&mut self, pid: NodeId) {
         self.promises_meta.insert(pid, PromiseState::PromisedHigher);
+    }
+
+    /// Returns the log sync to be applied after the leader's decided_idx, and the new decided_idx
+    /// Assumes that a majority has promised to the leader
+    /// and that all log syncs sent by the followers start directly from said decided_idx
+    /// slot status marks what to put in the status of the accepted but not yet decided values
+    pub(crate) fn take_my_log_sync(
+        &mut self,
+        decided_idx: SlotId,
+        status: SlotStatus,
+    ) -> (LogSync<T>, SlotId) {
+        // Only log syncs of nodes that have the maximum accepted round have to be considered
+        let max_accepted_ballot = self
+            .promises_meta
+            .values()
+            .filter_map(|state| {
+                if let PromiseState::Promised(ballot, _) = state {
+                    Some(ballot)
+                } else {
+                    None
+                }
+            })
+            .max()
+            .expect("No promised follower. Cannot take log sync");
+        let nodes_with_max_accepted_ballot: Vec<NodeId> = self
+            .promises_meta
+            .iter()
+            .filter_map(|(id, state)| {
+                if let PromiseState::Promised(ballot, _) = state {
+                    if ballot == max_accepted_ballot {
+                        return Some(*id);
+                    }
+                }
+                None
+            })
+            .collect();
+        // Suffixes of nodes with maximum accepted ballot
+        let mut relevant_log_syncs: Vec<Vec<LogEntry<T>>> = nodes_with_max_accepted_ballot
+            .iter()
+            .map(|id| {
+                let LogSync { sync_idx, suffix } = self
+                    .log_syncs
+                    .remove(id)
+                    .expect("Promised node without a log sync");
+                if sync_idx != decided_idx {
+                    panic!("Follower log sync does not start at the correct index");
+                }
+                suffix
+            })
+            .collect();
+
+        let mut final_suffix = Vec::new();
+        let mut current_decided_idx = decided_idx;
+
+        // Reverse suffixes to use more efficient pop()
+        for suffix in &mut relevant_log_syncs {
+            suffix.reverse();
+        }
+
+        loop {
+            let mut entries_at_slot = Vec::new();
+            for suffix in &mut relevant_log_syncs {
+                if let Some(entry) = suffix.pop() {
+                    entries_at_slot.push(entry);
+                }
+            }
+
+            // If no nodes have an entry for this slot, we are done
+            if entries_at_slot.is_empty() {
+                break;
+            }
+
+            let mut resolved_entry = Self::find_correct_log_sync_value_for_slot(entries_at_slot);
+
+            match &mut resolved_entry {
+                LogEntry::Decided(_) => {
+                    current_decided_idx += 1;
+                }
+                LogEntry::Undecided(_, _, entry_status) => {
+                    // Replace Undecided status with the target
+                    *entry_status = status.clone();
+                }
+                LogEntry::Empty => {}
+            }
+            final_suffix.push(resolved_entry);
+        }
+        (
+            LogSync {
+                sync_idx: decided_idx,
+                suffix: final_suffix,
+            },
+            current_decided_idx,
+        )
+    }
+
+    fn find_correct_log_sync_value_for_slot(mut values: Vec<LogEntry<T>>) -> LogEntry<T> {
+        // 1. If there is a decided entry, return it
+        if let Some(pos) = values
+            .iter()
+            .position(|e| matches!(e, LogEntry::Decided(_)))
+        {
+            return values.remove(pos);
+        }
+
+        // 2. Count frequencies of Undecided entries
+        let mut counts = HashMap::new();
+        for entry in &values {
+            if let LogEntry::Undecided(id, _, _) = entry {
+                *counts.entry(*id).or_insert(0) += 1;
+            }
+        }
+
+        // 3. Find the EntryId with the highest count
+        // max_by_key will pick one arbitrarily if there's a tie.
+        if let Some((&max_id, _)) = counts.iter().max_by_key(|&(_, count)| count) {
+            let pos = values
+                .iter()
+                .position(|e| matches!(e, LogEntry::Undecided(id, _, _) if id == &max_id))
+                .expect("Winning ID must exist in the original list");
+
+            return values.remove(pos);
+        }
+
+        // 4. If no Decided or Undecided entries exist, it's Empty
+        LogEntry::Empty
     }
 
     pub(crate) fn add_proposal(
@@ -195,7 +329,7 @@ where
 
     pub(crate) fn get_decided_idx(&self, pid: NodeId) -> Option<usize> {
         match self.promises_meta.get(&pid) {
-            Some(PromiseState::Promised(decided_idx)) => Some(*decided_idx),
+            Some(PromiseState::Promised(metadata)) => Some(metadata.decided_idx),
             _ => None,
         }
     }

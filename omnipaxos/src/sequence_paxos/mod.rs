@@ -83,7 +83,6 @@ where
     leader_state: LeaderState<T>,
     // Keeps track of sequence of accepts from leader where AcceptSync = 1
     current_seq_num: SequenceNumber,
-    cached_promise_message: Option<Promise<T>>,
     // Sequence paxos operating mode (fast or default)
     pub(crate) mode: Mode,
     #[cfg(feature = "logging")]
@@ -129,8 +128,6 @@ where
             outgoing,
             leader_state: LeaderState::<T>::with(leader, num_nodes, quorum_size, super_quorum_size),
             current_seq_num: SequenceNumber::default(),
-            cached_promise_message: None,
-            //replicated_data: ReplicatedData::<T>::with_capacity(10000),
             mode,
             #[cfg(feature = "logging")]
             logger: {
@@ -162,9 +159,7 @@ where
         &self.state
     }
 
-    /// Detects if a Prepare, Promise, AcceptStopSign, Decide of a Stopsign, or PrepareReq message
-    /// has been sent but not been received. If so resends them. Note: We can't detect if a
-    /// StopSign's Decide message has been received so we always resend to be safe.
+    /// Detects if a message has been sent but not been received.
     pub(crate) fn resend_message_timeout(&mut self) {
         match self.state.0 {
             Role::Leader => self.resend_messages_leader(),
@@ -180,6 +175,10 @@ where
     /// Append an entry to the replicated log.
     pub(crate) fn append(&mut self, entry: T) {
         let entry_id = self.next_data_id();
+        self.try_append(entry_id, entry);
+    }
+
+    pub(crate) fn try_append(&mut self, entry_id: EntryId, entry: T) {
         match self.state {
             (Role::Leader, Phase::Accept) => match self.mode {
                 Mode::OmniPaxos => self.op_accept_entry_leader((entry_id, entry)),
@@ -190,6 +189,15 @@ where
                 Mode::FastPaxos => self.fp_fast_propose((entry_id, entry)),
             },
             _ => self.buffered_proposals.push((entry_id, entry)),
+        }
+    }
+
+    pub(crate) fn handle_buffered_proposals(&mut self) {
+        if !self.buffered_proposals.is_empty() {
+            let entries = std::mem::take(&mut self.buffered_proposals);
+            for (entry_id, entry) in entries {
+                self.try_append(entry_id, entry);
+            }
         }
     }
 

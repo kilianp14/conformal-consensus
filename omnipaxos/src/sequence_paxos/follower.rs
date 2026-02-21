@@ -1,6 +1,8 @@
 use crate::{
-    sequence_paxos::{messages::*, Promise, SequencePaxos},
-    utils::{Ballot, Entry, MessageStatus, NodeId, Phase, Role, SequenceNumber},
+    sequence_paxos::{messages::*, utils::LogSync, Promise, SequencePaxos},
+    utils::{
+        Ballot, Entry, LogEntry, MessageStatus, NodeId, Phase, Role, SequenceNumber, SlotStatus,
+    },
 };
 #[cfg(feature = "logging")]
 use slog::{debug, info, trace, warn};
@@ -17,26 +19,17 @@ where
             self.state = (Role::Follower, Phase::Prepare);
             self.current_seq_num = SequenceNumber::default();
             let na = self.internal_storage.get_accepted_round();
-            let accepted_idx = self.internal_storage.get_accepted_idx();
-            let log_sync = if na > prep.n_accepted {
-                // I'm more up to date: send leader what he is missing after his decided index.
-                Some(self.create_log_sync(prep.decided_idx))
-            } else if na == prep.n_accepted && accepted_idx > prep.accepted_idx {
-                // I'm more up to date and in same round: send leader what he is missing after his
-                // accepted index.
-                Some(self.create_log_sync(prep.accepted_idx))
-            } else {
-                // I'm equally or less up to date
-                None
+            // send leader everything after his decided index
+            let log_sync = LogSync {
+                suffix: self.internal_storage.get_suffix(prep.decided_idx),
+                sync_idx: prep.decided_idx,
             };
             let promise = Promise {
                 n: prep.n,
                 n_accepted: na,
                 decided_idx: self.internal_storage.get_decided_idx(),
-                accepted_idx,
                 log_sync,
             };
-            self.cached_promise_message = Some(promise.clone());
             self.send_msg_to(from, PaxosMsg::Promise(promise));
             #[cfg(feature = "logging")]
             info!(self.logger, "Pid: {} promising {:?}", self.pid, prep.n);
@@ -57,22 +50,45 @@ where
                     accsync
                 );
             }
-            self.cached_promise_message = None;
-            self.internal_storage.set_decided_idx(accsync.decided_idx);
-            self.internal_storage.set_accepted_round(accsync.n);
-            let log_sync = accsync.log_sync;
-            let new_accepted_idx = self
-                .internal_storage
-                .append_suffix(log_sync.suffix, log_sync.sync_idx);
-            // TODO: Mode dependent
-            self.forward_buffered_proposals();
-            let accepted = Accepted {
-                n: accsync.n,
-                accepted_idx: new_accepted_idx,
-            };
             self.state = (Role::Follower, Phase::Accept);
             self.current_seq_num = accsync.seq_num;
-            self.send_msg_to(from, PaxosMsg::OpAccepted(accepted));
+            self.internal_storage.set_decided_idx(accsync.decided_idx);
+            self.internal_storage.set_accepted_round(accsync.n);
+            self.internal_storage
+                .append_suffix(accsync.log_sync.suffix, accsync.log_sync.sync_idx);
+
+            // Accept all the undecided slots after the decided index
+            let mut slot_idx = accsync.decided_idx;
+            for log_entry in self.internal_storage.get_suffix(slot_idx) {
+                if let LogEntry::Undecided(entry_id, entry, status) = log_entry {
+                    match status {
+                        SlotStatus::OpAccepted => {
+                            let accepted = Accepted {
+                                n: accsync.n,
+                                slot_idx,
+                            };
+                            self.send_msg_to(from, PaxosMsg::OpAccepted(accepted))
+                        }
+                        SlotStatus::FpFastAccepted => {
+                            let fast_accepted = FpFastAccepted {
+                                n: accsync.n,
+                                entry: (entry_id, entry),
+                                slot_idx,
+                            };
+                            self.send_msg_to(from, PaxosMsg::FpFastAccepted(fast_accepted))
+                        }
+                        SlotStatus::FpSlowAccepted => {
+                            let accepted = Accepted {
+                                n: accsync.n,
+                                slot_idx,
+                            };
+                            self.send_msg_to(from, PaxosMsg::FpSlowAccepted(accepted))
+                        }
+                    }
+                }
+                slot_idx += 1;
+            }
+            self.handle_buffered_proposals();
         }
     }
 
