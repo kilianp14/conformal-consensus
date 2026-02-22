@@ -1,6 +1,6 @@
 use crate::{
     sequence_paxos::utils::{LogSync, SlotId},
-    utils::{Ballot, Entry, EntryId, NodeId, SequenceNumber},
+    utils::{AcceptStatus, Ballot, Entry, EntryId, NodeId, SequenceNumber},
 };
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -60,8 +60,7 @@ where
     pub log_sync: LogSync<T>,
 }
 
-/// Message with entry to be replicated sent by the leader in accept phase of OmniPaxos or
-/// in FastPaxos indicating a Slow path.
+/// Message with entry to be replicated sent by the leader in accept phase
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Accept<T>
@@ -76,45 +75,25 @@ where
     pub entry: (EntryId, T),
     /// The index to place the entry.
     pub slot_idx: SlotId,
+    /// Way in which value should be accepted
+    pub accept_status: AcceptStatus,
 }
 
-/// Message sent by follower to leader when entry has been accepted in OmniPaxos or in a slow round
-/// in FastPaxos.
+/// Message sent by follower to leader when entry has been accepted
 #[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct Accepted {
+pub struct Accepted<T>
+where
+    T: Entry,
+{
     /// The current round.
     pub n: Ballot,
+    /// Entry to be replicated.
+    pub entry: (EntryId, T),
     /// The index where the entry was placed.
     pub slot_idx: SlotId,
-}
-
-/// Message with entry proposed to be replicated in FastPaxos broadcasted to all nodes.
-#[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct FpPropose<T>
-where
-    T: Entry,
-{
-    /// Entry to be replicated.
-    pub entry: (EntryId, T),
-    /// The index to place the entry.
-    pub slot_idx: SlotId,
-}
-
-/// Message sent by a follower to leader in FastPaxos when entry has been accepted in fast round
-#[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct FpFastAccepted<T>
-where
-    T: Entry,
-{
-    /// The current round.
-    pub n: Ballot,
-    /// Entry to be replicated.
-    pub entry: (EntryId, T),
-    /// The index to place the entry.
-    pub slot_idx: SlotId,
+    /// Way in which value was accepted
+    pub accept_status: AcceptStatus,
 }
 
 /// Message sent by leader to followers to decide up to a certain index in the log.
@@ -131,7 +110,7 @@ where
     /// Entry to be decided.
     pub entry: T,
     /// The index to place the decided entry.
-    pub decided_idx: SlotId,
+    pub slot_idx: SlotId,
 }
 
 /// Message sent by follower to leader when accepting an entry is rejected.
@@ -157,19 +136,9 @@ where
     Prepare(Prepare),
     Promise(Promise<T>),
     AcceptSync(AcceptSync<T>),
-
-    // OmniPaxos Messages
-    OpProposalForward(EntryId, T),
-    OpAccept(Accept<T>),
-    OpAccepted(Accepted),
-
-    // FastPaxos Messages
-    FpPropose(FpPropose<T>),
-    FpFastAccepted(FpFastAccepted<T>),
-    FpSlowAccept(Accept<T>),
-    FpSlowAccepted(Accepted),
-
-    // Shared Messages
+    Accept(Accept<T>),
+    Accepted(Accepted<T>),
+    ProposalForward(EntryId, T),
     NotAccepted(NotAccepted),
     Decide(Decide<T>),
 }

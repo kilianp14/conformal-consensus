@@ -1,7 +1,7 @@
 use crate::{
     sequence_paxos::{messages::*, utils::LogSync, Promise, SequencePaxos},
     utils::{
-        Ballot, Entry, LogEntry, MessageStatus, NodeId, Phase, Role, SequenceNumber, SlotStatus,
+        AcceptStatus, Ballot, Entry, LogEntry, MessageStatus, NodeId, Phase, Role, SequenceNumber,
     },
 };
 #[cfg(feature = "logging")]
@@ -30,6 +30,7 @@ where
                 decided_idx: self.internal_storage.get_decided_idx(),
                 log_sync,
             };
+            self.cached_promise_message = Some(promise.clone());
             self.send_msg_to(from, PaxosMsg::Promise(promise));
             #[cfg(feature = "logging")]
             info!(self.logger, "Pid: {} promising {:?}", self.pid, prep.n);
@@ -52,6 +53,7 @@ where
             }
             self.state = (Role::Follower, Phase::Accept);
             self.current_seq_num = accsync.seq_num;
+            self.cached_promise_message = None;
             self.internal_storage.set_decided_idx(accsync.decided_idx);
             self.internal_storage.set_accepted_round(accsync.n);
             self.internal_storage
@@ -60,31 +62,14 @@ where
             // Accept all the undecided slots after the decided index
             let mut slot_idx = accsync.decided_idx;
             for log_entry in self.internal_storage.get_suffix(slot_idx) {
-                if let LogEntry::Undecided(entry_id, entry, status) = log_entry {
-                    match status {
-                        SlotStatus::OpAccepted => {
-                            let accepted = Accepted {
-                                n: accsync.n,
-                                slot_idx,
-                            };
-                            self.send_msg_to(from, PaxosMsg::OpAccepted(accepted))
-                        }
-                        SlotStatus::FpFastAccepted => {
-                            let fast_accepted = FpFastAccepted {
-                                n: accsync.n,
-                                entry: (entry_id, entry),
-                                slot_idx,
-                            };
-                            self.send_msg_to(from, PaxosMsg::FpFastAccepted(fast_accepted))
-                        }
-                        SlotStatus::FpSlowAccepted => {
-                            let accepted = Accepted {
-                                n: accsync.n,
-                                slot_idx,
-                            };
-                            self.send_msg_to(from, PaxosMsg::FpSlowAccepted(accepted))
-                        }
-                    }
+                if let LogEntry::Undecided(entry_id, entry, accept_status) = log_entry {
+                    let accepted = Accepted {
+                        n: accsync.n,
+                        entry: (entry_id, entry),
+                        slot_idx,
+                        accept_status,
+                    };
+                    self.send_msg_to(from, PaxosMsg::Accepted(accepted));
                 }
                 slot_idx += 1;
             }
@@ -92,76 +77,37 @@ where
         }
     }
 
-    fn forward_buffered_proposals(&mut self) {
-        let proposals = std::mem::take(&mut self.buffered_proposals);
-        for proposal in proposals {
-            self.forward_proposal(proposal);
-        }
-    }
-
-    pub(crate) fn handle_op_accept(&mut self, op_acc: Accept<T>) {
-        if self.check_valid_ballot(op_acc.n)
+    pub(crate) fn handle_accept(&mut self, acc: Accept<T>) {
+        if self.check_valid_ballot(acc.n)
             && self.state == (Role::Follower, Phase::Accept)
-            && self.handle_sequence_num(op_acc.seq_num, op_acc.n.pid) == MessageStatus::Expected
+            && self.handle_sequence_num(acc.seq_num, acc.n.pid) == MessageStatus::Expected
+            // Slow Accepts should always override, otherwise only override empty slots
+            && (acc.accept_status == AcceptStatus::FpSlowAccepted
+                || self.internal_storage.slot_is_empty(acc.slot_idx))
         {
-            #[cfg(feature = "logging")]
-            {
-                let (r, p) = &self.state;
-                debug!(
-                    self.logger,
-                    "Self role {:?}, phase {:?}. Incoming Slow Accept from {:?}: {:?}",
-                    r,
-                    p,
-                    op_acc.n.pid,
-                    op_acc
-                );
-            }
-            self.internal_storage
-                .insert_at_index(op_acc.accepted_idx, op_acc.entry);
-            let accepted = Accepted {
-                n: op_acc.n,
-                accepted_idx: op_acc.accepted_idx,
-            };
-            self.send_msg_to(op_acc.n.pid, PaxosMsg::OpAccepted(accepted));
-        }
-    }
-
-    pub(crate) fn handle_fp_propose(&mut self, fast_proposal: FpPropose<T>) {
-        // TODO
-        #[cfg(feature = "logging")]
-        {
-            let (r, p) = &self.state;
-            debug!(
-                self.logger,
-                "Self role {:?}, phase {:?}. Incoming fast proposal: {:?}", r, p, fast_proposal
+            self.internal_storage.insert_at_index(
+                acc.slot_idx,
+                LogEntry::Undecided(acc.entry.0, acc.entry.1.clone(), acc.accept_status),
             );
+            let accepted = Accepted {
+                n: acc.n,
+                entry: acc.entry,
+                slot_idx: acc.slot_idx,
+                accept_status: acc.accept_status,
+            };
+            self.send_msg_to(acc.n.pid, PaxosMsg::Accepted(accepted));
         }
-        if self.state.1 == Phase::Accept {}
     }
 
-    pub(crate) fn handle_fp_slow_accept(&mut self, slow_acc: Accept<T>) {
-        // TODO
-    }
-
-    pub(crate) fn handle_decide(&mut self, dec: Decide) {
+    pub(crate) fn handle_decide(&mut self, dec: Decide<T>) {
         if self.check_valid_ballot(dec.n)
             && self.state.1 == Phase::Accept
             && self.handle_sequence_num(dec.seq_num, dec.n.pid) == MessageStatus::Expected
         {
-            #[cfg(feature = "logging")]
-            {
-                let (r, p) = &self.state;
-                debug!(
-                    self.logger,
-                    "Self role {:?}, phase {:?}. Incoming Decide from {:?}: {:?}",
-                    r,
-                    p,
-                    dec.n.pid,
-                    dec
-                );
-            }
-            if dec.decided_idx > self.internal_storage.get_decided_idx() {
-                self.internal_storage.set_decided_idx(dec.decided_idx);
+            self.internal_storage
+                .insert_at_index(dec.slot_idx, LogEntry::Decided(dec.entry));
+            if dec.slot_idx > self.internal_storage.get_decided_idx() {
+                self.internal_storage.set_decided_idx(dec.slot_idx);
             }
         }
     }

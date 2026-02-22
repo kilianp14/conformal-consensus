@@ -561,8 +561,8 @@ pub mod verification {
             let log_idx = idx + offset;
             match entry {
                 LogEntry::Decided(i) if log_idx < decided_idx => assert_eq!(*i, exp_entries[idx]),
-                LogEntry::Undecided(i) if log_idx >= decided_idx => {
-                    assert_eq!(*i.as_ref().unwrap(), exp_entries[idx])
+                LogEntry::Undecided(_, i, _) if log_idx >= decided_idx => {
+                    assert_eq!(*i, exp_entries[idx])
                 }
                 e => panic!(
                     "{}",

@@ -16,14 +16,14 @@ pub trait Entry: Clone + Debug {}
 pub type EntryId = (NodeId, u64);
 
 /// The status of an Undecided entry in the log
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub enum SlotStatus {
-    /// Slot contains an entry accepted from the leader in OmniPaxos
+pub enum AcceptStatus {
+    /// Accepted via OmniPaxos
     OpAccepted,
-    /// Slot contains an entry accepted via the fast path of FastPaxos
+    /// Accepted via the fast path of FastPaxos
     FpFastAccepted,
-    /// Slot contains an entry accepted via the slow path of FastPaxos
+    /// Accepted via the slow path of FastPaxos
     FpSlowAccepted,
 }
 
@@ -37,7 +37,7 @@ where
     /// The entry is decided.
     Decided(T),
     /// The entry is NOT decided. Might be removed from log at later time. Empty slots possible
-    Undecided(EntryId, T, SlotStatus),
+    Undecided(EntryId, T, AcceptStatus),
     /// Slot is currently empty
     Empty,
 }

@@ -3,8 +3,8 @@ use crate::utils::create_logger;
 use crate::{
     sequence_paxos::{log::MemoryStorage, utils::LeaderState},
     utils::{
-        defaults::DEFAULT_MODE, Ballot, Entry, EntryId, FlexibleQuorum, LogEntry, Mode, NodeId,
-        Phase, Quorum, Role, SequenceNumber, SlotStatus,
+        defaults::DEFAULT_MODE, AcceptStatus, Ballot, Entry, EntryId, FlexibleQuorum, LogEntry,
+        Mode, NodeId, Phase, Quorum, Role, SequenceNumber,
     },
     OmniPaxosConfig,
 };
@@ -81,6 +81,7 @@ where
     buffered_proposals: Vec<(EntryId, T)>,
     outgoing: Vec<PaxosMessage<T>>,
     leader_state: LeaderState<T>,
+    cached_promise_message: Option<Promise<T>>,
     // Keeps track of sequence of accepts from leader where AcceptSync = 1
     current_seq_num: SequenceNumber,
     // Sequence paxos operating mode (fast or default)
@@ -127,6 +128,7 @@ where
             entry_id: (pid, 0),
             outgoing,
             leader_state: LeaderState::<T>::with(leader, num_nodes, quorum_size, super_quorum_size),
+            cached_promise_message: None,
             current_seq_num: SequenceNumber::default(),
             mode,
             #[cfg(feature = "logging")]
@@ -206,14 +208,32 @@ where
     }
 
     fn fp_fast_propose(&mut self, entry: (EntryId, T)) {
+        let accept_status = AcceptStatus::FpFastAccepted;
+        // Add to storage
         let slot_idx = self.internal_storage.add_entry(LogEntry::Undecided(
             entry.0,
             entry.1.clone(),
-            SlotStatus::FpFastAccepted,
+            accept_status,
         ));
-        let fp = FpPropose { entry, slot_idx };
-        self.send_to_all_peers(PaxosMsg::FpPropose(fp));
-        // TODO: Handle leader interaction
+
+        // Send fast accept to all peers
+        let acc = Accept {
+            n: Ballot::default(),               // not needed for fast path
+            seq_num: SequenceNumber::default(), // not needed for fast path
+            entry: entry.clone(),
+            slot_idx,
+            accept_status,
+        };
+        self.send_to_all_peers(PaxosMsg::Accept(acc));
+
+        // Send Accepted message to leader
+        let accepted = Accepted {
+            n: self.leader_state.n_leader,
+            entry,
+            slot_idx,
+            accept_status,
+        };
+        self.send_msg_to(self.get_current_leader(), PaxosMsg::Accepted(accepted));
     }
 
     /// Handles re-establishing a connection to a previously disconnected peer.
@@ -233,7 +253,7 @@ where
     pub(crate) fn op_forward_proposal(&mut self, entry: (EntryId, T)) {
         let leader = self.get_current_leader();
         if leader > 0 && self.pid != leader {
-            let pf = PaxosMsg::OpProposalForward(entry.0, entry.1.clone());
+            let pf = PaxosMsg::ProposalForward(entry.0, entry.1.clone());
             self.send_msg_to(leader, pf);
         } else {
             self.buffered_proposals.push(entry);
@@ -277,21 +297,13 @@ where
             },
             PaxosMsg::AcceptSync(acc_sync) => self.handle_acceptsync(acc_sync, m.from),
 
-            // OmniPaxos
-            PaxosMsg::OpProposalForward(entry_id, entry) => {
-                self.handle_op_forwarded_proposal((entry_id, entry))
-            }
-            PaxosMsg::OpAccept(op_acc) => self.handle_op_accept(op_acc),
-            PaxosMsg::OpAccepted(op_accepted) => self.handle_op_accepted(op_accepted, m.from),
-
-            // FastPaxos
-            PaxosMsg::FpPropose(fast_proposal) => self.handle_fp_propose(fast_proposal),
-            PaxosMsg::FpFastAccepted(fast_accepted) => self.handle_fp_fast_accepted(fast_accepted),
-            PaxosMsg::FpSlowAccept(slow_acc) => self.handle_fp_slow_accept(slow_acc),
-            PaxosMsg::FpSlowAccepted(slow_accepted) => self.handle_fp_slow_accepted(slow_accepted),
-
-            // Shared
+            // Accept Phase
+            PaxosMsg::ProposalForward(entry_id, entry) => self.try_append(entry_id, entry),
+            PaxosMsg::Accept(acc) => self.handle_accept(acc),
+            PaxosMsg::Accepted(accepted) => self.handle_accepted(accepted, m.from),
             PaxosMsg::NotAccepted(not_acc) => self.handle_notaccepted(not_acc, m.from),
+
+            // Learn Phase
             PaxosMsg::Decide(d) => self.handle_decide(d),
         }
     }

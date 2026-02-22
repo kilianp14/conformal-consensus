@@ -1,7 +1,7 @@
-use crate::utils::{Ballot, Entry, EntryId, LogEntry, NodeId, SequenceNumber, SlotStatus};
+use crate::utils::{AcceptStatus, Ballot, Entry, EntryId, LogEntry, NodeId, SequenceNumber};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 pub type SlotId = usize;
 
@@ -30,19 +30,26 @@ pub(crate) enum PromiseState {
     PromisedHigher,
 }
 
-#[derive(Clone, Debug)]
-enum ProposalResult<T>
-where
-    T: Entry,
-{
+#[derive(Clone, Debug, Default)]
+enum SlotResult {
     // A quorum has not voted yet
     // or quorum has voted uniformly with fast accepts, but a fast quorum has not been achieved yet
+    #[default]
     Pending,
     // A quorum has voted, but vote is not uniform
-    SlowPath(EntryId, T),
+    SlowPath(EntryId),
     // A quorum has voted uniformly using OmniPaxos accept
     // or a fast quorum has voted uniformly
-    Decided(T),
+    Decided(EntryId),
+}
+
+pub(crate) enum LeaderAction<T> {
+    /// No significant state change occurred.
+    None,
+    /// The slot has transitioned to a Slow Path; the leader must re-propose.
+    ProcessSlowPath(SlotId, EntryId, T),
+    /// One or more slots have been finalized. Contains new decisions and new decided_idx
+    Decided(Vec<(SlotId, T)>, SlotId),
 }
 
 #[derive(Debug, Clone)]
@@ -60,7 +67,9 @@ where
     // Mapping between entry ids and entries
     entries: HashMap<EntryId, T>,
     // Stores proposals by slot and node
-    accept_meta: HashMap<SlotId, HashMap<NodeId, (EntryId, SlotStatus)>>,
+    accept_meta: HashMap<SlotId, HashMap<NodeId, (EntryId, AcceptStatus)>>,
+    /// Tracks the current state of each slot to detect transitions
+    slot_results: HashMap<SlotId, SlotResult>,
     // Majority quorum size
     pub(crate) quorum_size: usize,
     // Fast quorum size
@@ -81,9 +90,10 @@ where
             n_leader,
             promises_meta: HashMap::with_capacity(n_nodes),
             log_syncs: HashMap::with_capacity(n_nodes),
-            accept_meta: HashMap::new(),
-            entries: HashMap::new(),
             follower_seq_nums: HashMap::with_capacity(n_nodes),
+            entries: HashMap::new(),
+            accept_meta: HashMap::new(),
+            slot_results: HashMap::new(),
             quorum_size,
             super_quorum_size,
         }
@@ -140,7 +150,7 @@ where
     pub(crate) fn take_my_log_sync(
         &mut self,
         decided_idx: SlotId,
-        status: SlotStatus,
+        status: AcceptStatus,
     ) -> (LogSync<T>, SlotId) {
         // Only log syncs of nodes that have the maximum accepted round have to be considered
         let max_accepted_ballot = self
@@ -211,7 +221,7 @@ where
                 }
                 LogEntry::Undecided(_, _, entry_status) => {
                     // Replace Undecided status with the target
-                    *entry_status = status.clone();
+                    *entry_status = status;
                 }
                 LogEntry::Empty => {}
             }
@@ -264,72 +274,112 @@ where
         pid: NodeId,
         slot_idx: SlotId,
         entry: (EntryId, T),
-        slot_status: SlotStatus,
-    ) {
-        if decided_idx < slot_idx {
-            self.entries.insert(entry.0, entry.1);
-            self.accept_meta
-                .entry(slot_idx)
-                .or_insert_with(HashMap::new)
-                .insert(pid, (entry.0, slot_status));
+        accept_status: AcceptStatus,
+    ) -> LeaderAction<T> {
+        // Ignore proposals for slots that are already locally decided
+        if slot_idx <= decided_idx {
+            return LeaderAction::None;
+        }
+        // Metadata insert
+        self.entries.insert(entry.0, entry.1);
+        self.accept_meta
+            .entry(slot_idx)
+            .or_default()
+            .insert(pid, (entry.0, accept_status));
 
-            let proposal_result = self.compute_propose_result(slot_idx);
-            self.proposal_results.insert(key, value)
+        // Check if slot is pending to avoid initiaing slow paths more than once
+        let was_pending = matches!(
+            self.slot_results.get(&slot_idx),
+            None | Some(SlotResult::Pending)
+        );
+
+        // Compute slot result
+        let slot_result = self.compute_propose_result(slot_idx);
+
+        // State Logic
+        match slot_result {
+            // Only trigger the "Decided" action if we just decided at the current decided_idx
+            SlotResult::Decided(eid) if slot_idx == decided_idx => {
+                self.slot_results.insert(slot_idx, slot_result);
+                let mut newly_decided = Vec::new();
+                let mut current_idx = slot_idx;
+
+                // Drain contiguous decided slots
+                while let Some(SlotResult::Decided(entry_id)) = self.slot_results.get(&current_idx)
+                {
+                    // Clean up all state related to this slot and retrieve entry
+                    let val = self.entries.remove(entry_id).expect("Entry must exist");
+                    self.accept_meta.remove(&current_idx);
+                    self.slot_results.remove(&current_idx);
+
+                    newly_decided.push((current_idx, val));
+                    current_idx += 1;
+                }
+                LeaderAction::Decided(newly_decided, current_idx)
+            }
+            // Only trigger slow path action if slot was previously pending
+            SlotResult::SlowPath(entry_id) if was_pending => {
+                self.slot_results.insert(slot_idx, slot_result);
+                let entry = self
+                    .entries
+                    .get(&entry_id)
+                    .expect("Entry must exist")
+                    .clone();
+                LeaderAction::ProcessSlowPath(slot_idx, entry_id, entry)
+            }
+            _ => {
+                self.slot_results.insert(slot_idx, slot_result);
+                LeaderAction::None
+            }
         }
     }
 
-    fn compute_propose_result(&self, slot_idx: SlotId) -> ProposalResult<T> {
+    fn compute_propose_result(&self, slot_idx: SlotId) -> SlotResult {
         let proposals = match self.accept_meta.get(&slot_idx) {
             Some(p) => p,
-            None => return ProposalResult::NotEnoughVotes,
+            None => return SlotResult::Pending,
         };
+        // Not enough votes
         let total_votes_in_slot = proposals.len();
         if total_votes_in_slot < self.quorum_size {
-            return ProposalResult::NotEnoughVotes;
+            return SlotResult::Pending;
         }
 
+        // Count number of votes for every entry id
         let mut vote_counts: HashMap<EntryId, (usize, usize, usize, usize)> = HashMap::new();
         for (id, status) in proposals.values() {
             let (op, fast, slow, total) = vote_counts.entry(*id).or_insert((0, 0, 0, 0));
             *total += 1;
             match status {
-                SlotStatus::OpAccepted => *op += 1,
-                SlotStatus::FpFastAccepted => *fast += 1,
-                SlotStatus::FpSlowAccepted => *slow += 1,
+                AcceptStatus::OpAccepted => *op += 1,
+                AcceptStatus::FpFastAccepted => *fast += 1,
+                AcceptStatus::FpSlowAccepted => *slow += 1,
             }
         }
-        // Identify the entry with the most votes to check for quorum/decisions
+        // Identify the entry with the most votes
         let winner = vote_counts
             .iter()
             .max_by_key(|(_, (_, _, _, total))| *total)
             .map(|(id, counts)| (*id, *counts));
 
+        // Check if we can make a decision
         if let Some((entry_id, (op, _fast, slow, total_for_entry))) = winner {
-            let entry = self
-                .entries
-                .get(&entry_id)
-                .expect("Entry must exist at this point")
-                .clone();
             if total_for_entry >= self.super_quorum_size || op + slow >= self.quorum_size {
-                return ProposalResult::Decided(entry);
+                return SlotResult::Decided(entry_id);
             }
-            // Collision happened right now
+            // Collision
             if total_for_entry != total_votes_in_slot {
-                return ProposalResult::SlowPath(entry_id, entry);
+                return SlotResult::SlowPath(entry_id);
             }
-            return ProposalResult::Pending;
+            SlotResult::Pending
         } else {
             panic!("Votes but no winner should not be possible");
         }
     }
 
-    pub(crate) fn clean_proposals(&mut self, slot_idx: SlotId) {
-        self.accept_meta.remove(&slot_idx);
-    }
-
     pub(crate) fn get_decided_idx(&self, pid: NodeId) -> Option<usize> {
         match self.promises_meta.get(&pid) {
-            Some(PromiseState::Promised(metadata)) => Some(metadata.decided_idx),
+            Some(PromiseState::Promised(_, decided_idx)) => Some(*decided_idx),
             _ => None,
         }
     }
@@ -338,7 +388,7 @@ where
         self.promises_meta
             .iter()
             .filter_map(|(&id, promise_state)| match promise_state {
-                PromiseState::Promised(_) if id != self.n_leader.pid => Some(id),
+                PromiseState::Promised(_, _) if id != self.n_leader.pid => Some(id),
                 _ => None,
             })
             .collect()

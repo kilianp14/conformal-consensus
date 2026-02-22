@@ -90,7 +90,7 @@ where
 
     /// Checks whether a specific slot in the log is empty
     pub(crate) fn slot_is_empty(&self, index: SlotId) -> bool {
-        self.empty_slots.contains(&index)
+        (index >= self.log.len()) || self.empty_slots.contains(&index)
     }
 
     /// Read entries in the range `r`. Returns `None` if the range is out of bounds.

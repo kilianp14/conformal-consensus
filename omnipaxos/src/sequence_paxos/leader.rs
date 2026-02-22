@@ -1,10 +1,10 @@
 use crate::{
     sequence_paxos::{
         messages::*,
-        utils::{LeaderState, LogSync, PromiseMetaData},
+        utils::{LeaderAction, LeaderState, LogSync},
         Promise, SequencePaxos,
     },
-    utils::{Ballot, Entry, EntryId, LogEntry, Mode, NodeId, Phase, Role, SlotStatus},
+    utils::{AcceptStatus, Ballot, Entry, EntryId, LogEntry, Mode, NodeId, Phase, Role},
 };
 #[cfg(feature = "logging")]
 use slog::{debug, info};
@@ -83,13 +83,12 @@ where
             if received_majority {
                 self.state = (Role::Leader, Phase::Accept);
                 let status = match self.mode {
-                    Mode::OmniPaxos => SlotStatus::OpAccepted,
-                    Mode::FastPaxos => SlotStatus::FpSlowAccepted,
+                    Mode::OmniPaxos => AcceptStatus::OpAccepted,
+                    Mode::FastPaxos => AcceptStatus::FpSlowAccepted,
                 };
                 let decided_idx = self.internal_storage.get_decided_idx();
-                let (max_promise_sync, new_decided_idx) = self
-                    .leader_state
-                    .take_my_log_sync(decided_idx, status.clone());
+                let (max_promise_sync, new_decided_idx) =
+                    self.leader_state.take_my_log_sync(decided_idx, status);
                 self.internal_storage
                     .append_suffix(max_promise_sync.suffix, max_promise_sync.sync_idx);
                 self.internal_storage.set_decided_idx(new_decided_idx);
@@ -136,69 +135,96 @@ where
         self.send_msg_to(to, PaxosMsg::AcceptSync(acc_sync));
     }
 
-    pub(crate) fn handle_op_forwarded_proposal(&mut self, entry: (EntryId, T)) {
-        match self.state {
-            (Role::Leader, Phase::Prepare) => self.buffered_proposals.push(entry),
-            (Role::Leader, Phase::Accept) => self.op_accept_entry_leader(entry),
-            _ => self.forward_proposal(entry),
-        }
-    }
-
     pub(crate) fn op_accept_entry_leader(&mut self, entry: (EntryId, T)) {
-        let slot_idx =
-            self.internal_storage
-                .add_entry(LogEntry::Undecided(SlotStatus::OpAccepted(
-                    entry.0,
-                    entry.1.clone(),
-                )));
+        let accept_status = AcceptStatus::OpAccepted;
+
+        // Add to storage
+        let slot_idx = self.internal_storage.add_entry(LogEntry::Undecided(
+            entry.0,
+            entry.1.clone(),
+            accept_status,
+        ));
+
+        // Send Accept messages
         for pid in self.leader_state.get_promised_followers() {
             let acc = Accept {
                 n: self.leader_state.n_leader,
                 seq_num: self.leader_state.next_seq_num(pid),
                 entry: entry.clone(),
                 slot_idx,
+                accept_status,
             };
-            self.send_msg_to(pid, PaxosMsg::OpAccept(acc));
+            self.send_msg_to(pid, PaxosMsg::Accept(acc));
         }
+
+        // Add own proposal
+        let leader_action = self.leader_state.add_proposal(
+            self.internal_storage.get_decided_idx(),
+            self.pid,
+            slot_idx,
+            entry,
+            accept_status,
+        );
+        self.handle_leader_action(leader_action);
     }
 
-    pub(crate) fn handle_op_accepted(&mut self, op_accepted: Accepted, from: NodeId) {
-        if op_accepted.n == self.leader_state.n_leader
-            && self.state == (Role::Leader, Phase::Accept)
-        {
-            self.leader_state
-                .set_accepted_idx(from, op_accepted.accepted_idx);
-            if op_accepted.accepted_idx > self.internal_storage.get_decided_idx()
-                && self.leader_state.is_chosen(op_accepted.accepted_idx)
-            {
-                let decided_idx = op_accepted.accepted_idx;
-                self.internal_storage.set_decided_idx(decided_idx);
-                for pid in self.leader_state.get_promised_followers() {
-                    let d = Decide {
-                        n: self.leader_state.n_leader,
-                        seq_num: self.leader_state.next_seq_num(pid),
-                        decided_idx,
-                    };
-                    self.send_msg_to(pid, PaxosMsg::Decide(d));
-                }
-            }
+    pub(crate) fn handle_accepted(&mut self, accepted: Accepted<T>, from: NodeId) {
+        if accepted.n == self.leader_state.n_leader && self.state == (Role::Leader, Phase::Accept) {
+            let leader_action = self.leader_state.add_proposal(
+                self.internal_storage.get_decided_idx(),
+                from,
+                accepted.slot_idx,
+                accepted.entry,
+                accepted.accept_status,
+            );
+            self.handle_leader_action(leader_action);
         }
         #[cfg(feature = "logging")]
         debug!(
             self.logger,
-            "Got Accepted from {}, idx: {}, chosen_idx: {}",
+            "Got Accepted from {}, chosen_idx: {}",
             from,
-            op_accepted.accepted_idx,
             self.internal_storage.get_decided_idx(),
         );
     }
 
-    pub(crate) fn handle_fp_fast_accepted(&mut self, fast_accepted: FpFastAccepted<T>) {
-        // TODO
-    }
-
-    pub(crate) fn handle_fp_slow_accepted(&mut self, slow_accepted: Accepted) {
-        // TODO
+    fn handle_leader_action(&mut self, action: LeaderAction<T>) {
+        match action {
+            LeaderAction::ProcessSlowPath(slot_idx, entry_id, entry) => {
+                let accept_status = AcceptStatus::FpSlowAccepted;
+                for pid in self.leader_state.get_promised_followers() {
+                    let a = Accept {
+                        n: self.leader_state.n_leader,
+                        seq_num: self.leader_state.next_seq_num(pid),
+                        entry: (entry_id, entry.clone()),
+                        slot_idx,
+                        accept_status,
+                    };
+                    self.send_msg_to(pid, PaxosMsg::Accept(a));
+                }
+                self.internal_storage.insert_at_index(
+                    slot_idx,
+                    LogEntry::Undecided(entry_id, entry, accept_status),
+                );
+            }
+            LeaderAction::Decided(new_decided_entries, new_decided_index) => {
+                self.internal_storage.set_decided_idx(new_decided_index);
+                for (slot_idx, entry) in new_decided_entries {
+                    for pid in self.leader_state.get_promised_followers() {
+                        let d = Decide {
+                            n: self.leader_state.n_leader,
+                            seq_num: self.leader_state.next_seq_num(pid),
+                            entry: entry.clone(),
+                            slot_idx,
+                        };
+                        self.send_msg_to(pid, PaxosMsg::Decide(d));
+                    }
+                    self.internal_storage
+                        .insert_at_index(slot_idx, LogEntry::Decided(entry));
+                }
+            }
+            LeaderAction::None => {}
+        }
     }
 
     pub(crate) fn handle_notaccepted(&mut self, not_acc: NotAccepted, from: NodeId) {
