@@ -2,7 +2,7 @@ use crate::{
     errors::{valid_config, ConfigError},
     leader_election::BallotLeaderElection,
     messages::Message,
-    predictor::{AlwaysOmniPaxosMode, ModeSetter},
+    predictor::{ModeSetter, RandomModeSetter},
     sequence_paxos::SequencePaxos,
     utils::{
         defaults::{BUFFER_SIZE, ELECTION_TIMEOUT, RESEND_MESSAGE_TIMEOUT},
@@ -67,7 +67,7 @@ impl OmniPaxosConfig {
             resend_message_clock: LogicalClock::with(
                 self.server_config.resend_message_tick_timeout,
             ),
-            mode_setter: Box::new(AlwaysOmniPaxosMode {}),
+            mode_setter: Box::new(RandomModeSetter {}),
             seq_paxos: SequencePaxos::with(self.into()),
         })
     }

@@ -177,15 +177,17 @@ where
                 accepted.entry,
                 accepted.accept_status,
             );
+            #[cfg(feature = "logging")]
+            info!(
+                self.logger,
+                "Got {:?} from {} for slot {:?} => LeaderAction: {:?}",
+                accepted.accept_status,
+                from,
+                accepted.slot_idx,
+                leader_action
+            );
             self.handle_leader_action(leader_action);
         }
-        #[cfg(feature = "logging")]
-        debug!(
-            self.logger,
-            "Got Accepted from {}, chosen_idx: {}",
-            from,
-            self.internal_storage.get_decided_idx(),
-        );
     }
 
     fn handle_leader_action(&mut self, action: LeaderAction<T>) {
@@ -208,7 +210,6 @@ where
                 );
             }
             LeaderAction::Decided(new_decided_entries, new_decided_index) => {
-                self.internal_storage.set_decided_idx(new_decided_index);
                 for (slot_idx, entry) in new_decided_entries {
                     for pid in self.leader_state.get_promised_followers() {
                         let d = Decide {
@@ -222,6 +223,7 @@ where
                     self.internal_storage
                         .insert_at_index(slot_idx, LogEntry::Decided(entry));
                 }
+                self.internal_storage.set_decided_idx(new_decided_index);
             }
             LeaderAction::None => {}
         }

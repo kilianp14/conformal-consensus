@@ -226,14 +226,21 @@ where
         };
         self.send_to_all_peers(PaxosMsg::Accept(acc));
 
-        // Send Accepted message to leader
+        // Send own accepted to leader or handle if I am leader
         let accepted = Accepted {
-            n: self.leader_state.n_leader,
-            entry,
+            n: self.internal_storage.get_promise(),
             slot_idx,
+            entry,
             accept_status,
         };
-        self.send_msg_to(self.get_current_leader(), PaxosMsg::Accepted(accepted));
+        match self.state.0 {
+            Role::Follower => {
+                self.send_msg_to(self.get_current_leader(), PaxosMsg::Accepted(accepted));
+            }
+            Role::Leader => {
+                self.handle_accepted(accepted, self.pid);
+            }
+        }
     }
 
     /// Handles re-establishing a connection to a previously disconnected peer.
@@ -299,7 +306,12 @@ where
 
             // Accept Phase
             PaxosMsg::ProposalForward(entry_id, entry) => self.try_append(entry_id, entry),
-            PaxosMsg::Accept(acc) => self.handle_accept(acc),
+            PaxosMsg::Accept(acc) => match acc.accept_status {
+                AcceptStatus::FpFastAccepted => self.handle_fast_accept(acc),
+                AcceptStatus::OpAccepted | AcceptStatus::FpSlowAccepted => {
+                    self.handle_slow_accept(acc)
+                }
+            },
             PaxosMsg::Accepted(accepted) => self.handle_accepted(accepted, m.from),
             PaxosMsg::NotAccepted(not_acc) => self.handle_notaccepted(not_acc, m.from),
 

@@ -30,11 +30,10 @@ pub(crate) enum PromiseState {
     PromisedHigher,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 enum SlotResult {
     // A quorum has not voted yet
     // or quorum has voted uniformly with fast accepts, but a fast quorum has not been achieved yet
-    #[default]
     Pending,
     // A quorum has voted, but vote is not uniform
     SlowPath(EntryId),
@@ -43,6 +42,7 @@ enum SlotResult {
     Decided(EntryId),
 }
 
+#[derive(Debug, Clone)]
 pub(crate) enum LeaderAction<T> {
     /// No significant state change occurred.
     None,
@@ -277,7 +277,7 @@ where
         accept_status: AcceptStatus,
     ) -> LeaderAction<T> {
         // Ignore proposals for slots that are already locally decided
-        if slot_idx <= decided_idx {
+        if slot_idx < decided_idx {
             return LeaderAction::None;
         }
         // Metadata insert

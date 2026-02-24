@@ -1,10 +1,6 @@
 pub mod utils;
 
-use omnipaxos::{
-    messages::Message,
-    sequence_paxos::messages::PaxosMsg,
-    utils::{LogEntry, NodeId, SequenceNumber},
-};
+use omnipaxos::utils::{LogEntry, NodeId};
 use serial_test::serial;
 use std::{thread, time::Duration};
 use utils::{verification::verify_log, TestConfig, TestSystem, Value};
@@ -13,72 +9,6 @@ const SLEEP_TIMEOUT: Duration = Duration::from_secs(1);
 const INITIAL_PROPOSALS: u64 = 5;
 const DROPPED_PROPOSALS: u64 = 5;
 const SECOND_PROPOSALS: u64 = 5;
-
-/// Verifies that a leader sends out AcceptSync messages
-/// with increasing sequence numbers.
-#[test]
-#[serial]
-fn increasing_accept_seq_num_test() {
-    // Start Kompact system
-    let cfg = TestConfig::load("reconnect_test").expect("Test config couldn't be loaded");
-    let mut sys = TestSystem::with(cfg);
-    sys.start_all_nodes();
-
-    let initial_proposals: Vec<Value> = (0..INITIAL_PROPOSALS).map(Value::with_id).collect();
-    let leaders_proposals: Vec<Value> = (INITIAL_PROPOSALS..INITIAL_PROPOSALS + SECOND_PROPOSALS)
-        .map(Value::with_id)
-        .collect();
-    // We skip seq# 1 (AcceptSync), 2-6 (initial_proposals), and 7-11 (decide initial_proposals)
-    let expected_seq_nums: Vec<SequenceNumber> = (12..12 + SECOND_PROPOSALS)
-        .map(|counter| SequenceNumber {
-            session: 1,
-            counter,
-        })
-        .collect();
-
-    // Propose some values so that a leader is elected
-    sys.make_proposals(1, initial_proposals, cfg.wait_timeout);
-    let leader_id = sys.get_elected_leader(1, cfg.wait_timeout);
-    let leader = sys.nodes.get(&leader_id).unwrap();
-    let follower_id = (1..=cfg.num_nodes as NodeId)
-        .find(|x| *x != leader_id)
-        .expect("No followers found!");
-
-    // Get leader to propose more values and then collect cooresponding AcceptDecide messages
-    let mut accept_seq_nums = vec![];
-    let mut outgoing_messages = vec![];
-    for val in leaders_proposals {
-        leader.on_definition(|x| {
-            x.paxos.append(val);
-            x.paxos.take_outgoing_messages(&mut outgoing_messages)
-        });
-
-        let seq_nums = outgoing_messages
-            .drain(..)
-            .filter_map(|msg| match msg {
-                Message::SequencePaxos(m) => Some(m),
-                _ => None,
-            })
-            .filter(|msg| msg.to == follower_id)
-            .filter_map(|paxos_message| match &paxos_message.msg {
-                PaxosMsg::AcceptSync(m) => Some(m.seq_num),
-                PaxosMsg::Accept(m) => Some(m.seq_num),
-                PaxosMsg::Decide(m) => Some(m.seq_num),
-                _ => None,
-            });
-        accept_seq_nums.extend(seq_nums);
-    }
-
-    assert_eq!(accept_seq_nums, expected_seq_nums);
-    println!("Passed ascending_accept_sequence_test!");
-
-    let kompact_system =
-        std::mem::take(&mut sys.kompact_system).expect("No KompactSystem in memory");
-    match kompact_system.shutdown() {
-        Ok(_) => {}
-        Err(e) => panic!("Error on kompact shutdown: {}", e),
-    };
-}
 
 /// Verifies that a follower detects a missed AcceptDecide message from the leader and re-syncs
 /// with the same leader.

@@ -1,7 +1,10 @@
 pub mod utils;
 
 use kompact::prelude::{promise, Ask, FutureCollection};
+use omnipaxos::utils::NodeId;
+use rand::Rng;
 use serial_test::serial;
+use std::{thread, time::Duration};
 use utils::{verification::*, TestConfig, TestSystem};
 
 /// Verifies the 3 properties that the Paxos algorithm offers
@@ -9,45 +12,59 @@ use utils::{verification::*, TestConfig, TestSystem};
 #[test]
 #[serial]
 fn consensus_test() {
+    // Setup System
     let cfg = TestConfig::load("consensus_test").expect("Test config loaded");
     let mut sys = TestSystem::with(cfg);
+    sys.start_all_nodes();
 
-    let first_node = sys.nodes.get(&1).unwrap();
+    // Wait for an initial leader to be elected to ensure the cluster is ready
+    sys.get_elected_leader(1, cfg.wait_timeout);
+
     let mut futures = vec![];
     let vec_proposals = utils::create_proposals(1, cfg.num_proposals);
+    let mut rng = rand::thread_rng();
+
+    // Propose values to random nodes with random intervals
     for v in &vec_proposals {
+        // Pick a random node (1 to num_nodes)
+        let random_pid = rng.gen_range(1..=cfg.num_nodes as NodeId);
+        let node = sys.nodes.get(&random_pid).expect("Node should exist");
+
         let (kprom, kfuture) = promise::<()>();
-        first_node.on_definition(|x| {
+
+        node.on_definition(|x| {
             x.insert_decided_future(Ask::new(kprom, v.clone()));
             x.paxos.append(v.clone());
         });
         futures.push(kfuture);
+
+        // Random delay to simulate parallel vs sequential behavior
+        let delay = rng.gen_range(0..10);
+        if delay > 0 {
+            thread::sleep(Duration::from_millis(delay));
+        }
     }
 
-    sys.start_all_nodes();
-
+    // Wait for all proposals to be decided
     match FutureCollection::collect_with_timeout::<Vec<_>>(futures, cfg.wait_timeout) {
-        Ok(_) => {}
-        Err(e) => panic!("Error on collecting futures of decided proposals: {}", e),
+        Ok(_) => println!("All proposals decided successfully."),
+        Err(e) => panic!("Error collecting decided proposals: {}", e),
     }
 
-    let mut log = vec![];
-    for (pid, node) in sys.nodes {
-        log.push(node.on_definition(|x| {
+    // Consensus Property Verifications
+    let mut logs = vec![];
+    for (pid, node) in &sys.nodes {
+        logs.push(node.on_definition(|x| {
             let log = x.read_decided_log();
-            (pid, log)
+            (*pid, log)
         }));
     }
-
     let quorum_size = cfg.num_nodes / 2 + 1;
-    check_quorum(&log, quorum_size, &vec_proposals);
-    check_validity(&log, &vec_proposals);
-    check_consistent_log_prefixes(&log);
+    check_quorum(&logs, quorum_size, &vec_proposals);
+    check_validity(&logs, &vec_proposals);
+    check_consistent_log_prefixes(&logs);
 
-    let kompact_system =
-        std::mem::take(&mut sys.kompact_system).expect("No KompactSystem in memory");
-    match kompact_system.shutdown() {
-        Ok(_) => {}
-        Err(e) => panic!("Error on kompact shutdown: {}", e),
-    };
+    // Graceful Shutdown
+    let kompact_system = std::mem::take(&mut sys.kompact_system).expect("No KompactSystem");
+    kompact_system.shutdown().expect("Kompact shutdown failed");
 }

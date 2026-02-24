@@ -81,16 +81,20 @@ fn sync_test(test: SyncTest) {
     // Propose leader's decided entries
     sys.make_proposals(leader_id, leaders_new_decided.into(), cfg.wait_timeout);
 
-    // Propose leader's accepted entries. To ensure they are only accepted, stop a write quorum of nodes.
+    // Propose leader's accepted entries. To ensure they are only accepted, disconnect a write quorum of nodes.
     let write_quorum_size = match cfg.flexible_quorum {
         Some((_, write_quorum)) => write_quorum,
         None => cfg.num_nodes / 2 + 1,
     };
     let num_nodes_to_stop = cfg.num_nodes - write_quorum_size; // one follower is already disconnected
-    let nodes_to_stop = (1..=cfg.num_nodes as NodeId)
+    let nodes_to_stop: Vec<NodeId> = (1..=cfg.num_nodes as NodeId)
         .filter(|&n| n != follower_id && n != leader_id)
-        .take(num_nodes_to_stop);
-    nodes_to_stop.for_each(|pid| sys.stop_node(pid));
+        .take(num_nodes_to_stop)
+        .collect();
+
+    for pid in &nodes_to_stop {
+        sys.set_node_connections(*pid, false);
+    }
     leader.on_definition(|x| {
         for entry in leaders_accepted {
             x.paxos.append(entry.clone());
@@ -107,6 +111,9 @@ fn sync_test(test: SyncTest) {
         }
     });
     sys.set_node_connections(follower_id, true);
+    for pid in &nodes_to_stop {
+        sys.set_node_connections(*pid, true);
+    }
     match FutureCollection::collect_with_timeout::<Vec<_>>(proposal_futures, cfg.wait_timeout) {
         Ok(_) => {}
         Err(e) => {

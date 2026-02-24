@@ -41,14 +41,9 @@ where
         if self.check_valid_ballot(accsync.n) && self.state == (Role::Follower, Phase::Prepare) {
             #[cfg(feature = "logging")]
             {
-                let (r, p) = &self.state;
                 debug!(
                     self.logger,
-                    "Self role {:?}, phase {:?}. Incoming Accept Sync from {:?}: {:?}",
-                    r,
-                    p,
-                    from,
-                    accsync
+                    "Pid {}. Incoming Accept Sync from {:?}: {:?}", self.pid, from, accsync
                 );
             }
             self.state = (Role::Follower, Phase::Accept);
@@ -77,14 +72,52 @@ where
         }
     }
 
-    pub(crate) fn handle_accept(&mut self, acc: Accept<T>) {
+    pub(crate) fn handle_fast_accept(&mut self, acc: Accept<T>) {
+        if self.state.1 == Phase::Accept
+            // Fast Accepts should never override
+            && self.internal_storage.slot_is_empty(acc.slot_idx)
+        {
+            #[cfg(feature = "logging")]
+            {
+                info!(
+                    self.logger,
+                    "Pid {}. Incoming Fast Accept: {:?}", self.pid, acc
+                );
+            }
+            self.internal_storage.insert_at_index(
+                acc.slot_idx,
+                LogEntry::Undecided(acc.entry.0, acc.entry.1.clone(), acc.accept_status),
+            );
+            let accepted = Accepted {
+                n: self.internal_storage.get_promise(),
+                entry: acc.entry,
+                slot_idx: acc.slot_idx,
+                accept_status: acc.accept_status,
+            };
+            match self.state.0 {
+                Role::Follower => {
+                    self.send_msg_to(self.get_current_leader(), PaxosMsg::Accepted(accepted))
+                }
+                Role::Leader => self.handle_accepted(accepted, self.pid),
+            }
+        }
+    }
+
+    pub(crate) fn handle_slow_accept(&mut self, acc: Accept<T>) {
         if self.check_valid_ballot(acc.n)
             && self.state == (Role::Follower, Phase::Accept)
             && self.handle_sequence_num(acc.seq_num, acc.n.pid) == MessageStatus::Expected
-            // Slow Accepts should always override, otherwise only override empty slots
+            // Fast Paxos Slow Accepts should always override, otherwise only override empty slots
             && (acc.accept_status == AcceptStatus::FpSlowAccepted
                 || self.internal_storage.slot_is_empty(acc.slot_idx))
         {
+            #[cfg(feature = "logging")]
+            {
+                info!(
+                    self.logger,
+                    "Pid {}. Incoming Slow Accept: {:?}", self.pid, acc
+                );
+            }
             self.internal_storage.insert_at_index(
                 acc.slot_idx,
                 LogEntry::Undecided(acc.entry.0, acc.entry.1.clone(), acc.accept_status),
@@ -104,10 +137,14 @@ where
             && self.state.1 == Phase::Accept
             && self.handle_sequence_num(dec.seq_num, dec.n.pid) == MessageStatus::Expected
         {
+            #[cfg(feature = "logging")]
+            {
+                info!(self.logger, "Pid {}. Incoming Decide: {:?}", self.pid, dec);
+            }
             self.internal_storage
                 .insert_at_index(dec.slot_idx, LogEntry::Decided(dec.entry));
-            if dec.slot_idx > self.internal_storage.get_decided_idx() {
-                self.internal_storage.set_decided_idx(dec.slot_idx);
+            if dec.slot_idx >= self.internal_storage.get_decided_idx() {
+                self.internal_storage.set_decided_idx(dec.slot_idx + 1);
             }
         }
     }
