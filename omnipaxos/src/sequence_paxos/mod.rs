@@ -218,7 +218,7 @@ where
 
         // Send fast accept to all peers
         let acc = Accept {
-            n: Ballot::default(),               // not needed for fast path
+            n: self.internal_storage.get_promise(),
             seq_num: SequenceNumber::default(), // not needed for fast path
             entry: entry.clone(),
             slot_idx,

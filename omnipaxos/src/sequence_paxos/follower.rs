@@ -73,7 +73,8 @@ where
     }
 
     pub(crate) fn handle_fast_accept(&mut self, acc: Accept<T>) {
-        if self.state.1 == Phase::Accept
+        if self.check_valid_ballot(acc.n)
+            && self.state.1 == Phase::Accept
             // Fast Accepts should never override
             && self.internal_storage.slot_is_empty(acc.slot_idx)
         {
@@ -167,7 +168,6 @@ where
                 false
             }
             std::cmp::Ordering::Less => {
-                // Should never happen, but to be safe send PrepareReq
                 #[cfg(feature = "logging")]
                 warn!(
                     self.logger,
