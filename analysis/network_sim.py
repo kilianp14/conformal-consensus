@@ -6,8 +6,7 @@
 #
 # Metrics to watch:
 #   - Latency to leader
-#   - Latency to other peers. What? FQth lowest?
-#       -> Need some form of skew
+#   - Latency to other peers -> Need some form of skew
 #   - Rate of incoming proposals from client
 #   - Rate of incoming proposals from leader
 #   - Rate of incoming proposals from fellow followers -> skew as well
@@ -18,6 +17,7 @@
 import simpy
 import random
 import math
+import csv
 from collections import defaultdict
 import itertools
 
@@ -30,6 +30,8 @@ def initialize_network_latencies(
         link_latency = global_base * multiplier
         network.set_latency(a, b, link_latency)
         print(f"Link {a}<->{b}: {link_latency:.2f}ms ({multiplier * 100:.1f}%)")
+    for id in node_ids:
+        network.set_latency(a, a, 0, symmetric=False)
 
 
 class Network:
@@ -63,13 +65,16 @@ class Network:
 
 
 class Node:
-    def __init__(self, node_id, network):
-        self.id = node_id
+    def __init__(self, id, leader_id, network, majority_quorum, fast_quorum):
+        self.id = id
+        self.leader_id = leader_id
         self.network = network
         self.is_up = True
         self.network.add_node(self)
         self.slots = {}
         self._next_search_index = 0
+        self.majority_quorum = majority_quorum
+        self.fast_quorum = fast_quorum
 
     def get_lowest_free_slot(self):
         while self._next_search_index in self.slots:
@@ -85,41 +90,30 @@ class Node:
         self.on_receive(self.id, slot, sent_at, target_latency=0)
 
     def on_receive(self, sender_id, slot, sent_at, target_latency):
-        received_at = self.network.env.now
+        # received_at = self.network.env.now
+        # my_sorted_latencies = sorted(self.network.latencies[self.id].values())
         if slot not in self.slots:
-            self.slots[slot] = {
-                "from": sender_id,
-                "sent_at": sent_at,
-                "received_at": received_at,
-                # "real_latency": received_at - sent_at,
-                # "target_latency": target_latency,
-            }
+            self.slots[slot] = sender_id
+            #       "sent_at": sent_at,
+            #    "received_at": received_at,
+            #    "leader_latency": self.network.latencies[self.id][self.leader_id],
+            #    "cq_latency": my_sorted_latencies[self.majority_quorum - 1],
+            #    "fq_latency": my_sorted_latencies[self.fast_quorum - 1],
+            #    "worst_latency": my_sorted_latencies[len(my_sorted_latencies) - 1],
 
 
-def traffic_generator(env, nodes, total_rate_per_sec, leader_pct):
+def traffic_generator(env, nodes, total_rate_per_sec, weights):
     # Generates broadcasts across the cluster.
     # total_rate_per_sec: Total msgs/sec across all nodes.
-    # leader_pct: Share of traffic from Node 0 (0.0 to 1.0).
-
-    num_nodes = len(nodes)
-
-    # Calculate Weights
-    weights = [0.0] * num_nodes
-    weights[0] = leader_pct
-
-    if num_nodes > 1:
-        remaining_pct = 1.0 - leader_pct
-        # Randomly distribute the rest among other nodes
-        others = [random.random() for _ in range(num_nodes - 1)]
-        total_others = sum(others)
-        for i in range(1, num_nodes):
-            weights[i] = (others[i - 1] / total_others) * remaining_pct
+    # weights: per node percentage
 
     # Timing (Simulation is in ms, so 1000ms / rate)
     avg_interval = 1000.0 / total_rate_per_sec
 
-    print(f"Traffic Weights: {[f'{w * 100:.1f}%' for w in weights]}")
+    print(f"Traffic Weights: {[f'{w * 100:.1f}%' for w in weights.values()]}")
     print(f"Mean interval: {avg_interval:.4f}ms")
+
+    weights = list(weights.values())
 
     while True:
         # Pick node based on weights
@@ -133,10 +127,10 @@ def traffic_generator(env, nodes, total_rate_per_sec, leader_pct):
 
 
 NODES = 5
-BROADCASTS_PER_SEC = 5000
-LEADER_PCT = 0.3
-SIM_TIME = 1000
-BASE_LATENCY_MS = 0.2
+BROADCASTS_PER_SEC = 200
+LEADER_PCT = 0.6
+SIM_TIME = 5000
+BASE_LATENCY_MS = 2
 
 # --- Simulation Setup ---
 env = simpy.Environment()
@@ -144,12 +138,31 @@ net = Network(env)
 
 # First node is the leader
 node_ids = list(range(NODES))
-nodes = [Node(name, net) for name in node_ids]
+leader_id = 0
+majority_quorum = math.floor(NODES / 2 + 1)
+fast_quorum = math.ceil(3 * NODES / 4)
+nodes = [Node(id, leader_id, net, majority_quorum, fast_quorum) for id in node_ids]
 initialize_network_latencies(net, node_ids, global_base=BASE_LATENCY_MS)
 
+print(
+    f"Start Experiment with {NODES} nodes: CQ = {majority_quorum}, FQ = {fast_quorum}"
+)
+
+
+# Calculate Weights
+weights = {}
+weights[0] = LEADER_PCT
+
+if NODES > 1:
+    remaining_pct = 1.0 - LEADER_PCT
+    # Randomly distribute the rest among other nodes
+    others = [random.random() for _ in range(NODES - 1)]
+    total_others = sum(others)
+    for id in node_ids[1:]:
+        weights[id] = (others[id - 1] / total_others) * remaining_pct
 
 # Start the traffic process
-env.process(traffic_generator(env, nodes, BROADCASTS_PER_SEC, LEADER_PCT))
+env.process(traffic_generator(env, nodes, BROADCASTS_PER_SEC, weights))
 
 # Run for 1 second of simulation time (1000ms)
 env.run(until=SIM_TIME)
@@ -165,23 +178,16 @@ total_fully_replicated = 0
 collisions = 0
 successful_slots = 0
 successful_slot_sum = 0
+leader_success = 0
+super_majority_success = 0
 
 num_nodes = len(nodes)
-three_fourths = (3 / 4) * num_nodes
-majority = (1 / 2) * num_nodes
-leader_id = nodes[0].id
 
-# latency_diff_max = -1000000
 for slot in sorted(all_slots):
     senders = []
     for n in nodes:
         if slot in n.slots:
-            # latency_diff = abs(
-            #     n.slots[slot]["real_latency"] - n.slots[slot]["target_latency"]
-            # )
-            # if latency_diff > latency_diff_max:
-            #     latency_diff_max = latency_diff
-            senders.append(n.slots[slot]["from"])
+            senders.append(n.slots[slot])
 
     # CRITICAL: Only consider the slots where ALL nodes already have something
     if len(senders) < num_nodes:
@@ -194,27 +200,134 @@ for slot in sorted(all_slots):
     for s in senders:
         counts[s] += 1
 
-    # Condition A: Majority (>50%) have Node 0 (Leader) as the sender
-    leader_success = counts[leader_id] > majority
-
-    # Condition B: Super-majority (>=75%) have the same sender (anyone)
-    super_majority_success = any(c >= three_fourths for c in counts.values())
-
-    if leader_success or super_majority_success:
+    if counts[leader_id] >= majority_quorum:
         successful_slots += 1
         successful_slot_sum += slot
+        leader_success += 1
+    elif any(c >= fast_quorum for c in counts.values()):
+        successful_slots += 1
+        successful_slot_sum += slot
+        super_majority_success += 1
     else:
         collisions += 1
 
 collision_pct = (
     (collisions / total_fully_replicated) * 100 if total_fully_replicated > 0 else 0
 )
-# check index of average successful slot to check for bias
-avg_successful_slot = successful_slot_sum / successful_slots
 
 print(f"Total Fully Replicated Slots: {total_fully_replicated}")
-print(f"Successful (Consensus): {successful_slots}")
+print(f"Successful Consensus: {successful_slots}")
+print(f"Successful Consensus (Leader): {leader_success}")
+print(f"Successful Consensus (Fast-Path): {super_majority_success}")
 print(f"Collisions (No Consensus): {collisions}")
 print(f"Collision Percentage: {collision_pct:.2f}%")
-print(f"Average successful slot index: {avg_successful_slot}")
-# print(f"Max latency diff: {latency_diff_max}ms")
+# check index of average successful slot to check for bias
+print(f"Average successful slot index: {successful_slot_sum / successful_slots}")
+
+
+# --- CSV Setup ---
+csv_filename = "follower_metrics.csv"
+csv_headers = [
+    "latency_to_leader",
+    "latency_to_majority_cq",
+    "latency_to_fast_fq",
+    "latency_to_all_max",
+    "own_proposals_per_sec",
+    "leader_proposals_per_sec",
+    "other_followers_proposals_per_sec",
+    "max_follower_proposals_per_sec",
+    "leader_overwrites",
+    "fast_path_success",
+    "fast_path_other_node_success",
+    "collisions",
+    "collision_rate_pct",
+]
+
+with open(csv_filename, mode="w", newline="") as f:
+    writer = csv.writer(f)
+    writer.writerow(csv_headers)
+
+    print("\n--- Generating CSV Metrics ---")
+
+    for follower in [n for n in nodes if n.id != leader_id]:
+        # 1. Latency Metrics
+        # Get all latencies from this node, including 0 for itself
+        all_lats = []
+        for target_id in node_ids:
+            all_lats.append(net.latencies[follower.id][target_id])
+        all_lats.sort()
+
+        lat_to_leader = net.latencies[follower.id][leader_id]
+        lat_to_cq = all_lats[majority_quorum - 1]  # k-th closest
+        lat_to_fq = all_lats[fast_quorum - 1]  # k-th closest
+        lat_max = all_lats[-1]  # furthest node
+
+        # 2. Proposal Rate Metrics (msgs/sec)
+        own_rate = weights[follower.id] * BROADCASTS_PER_SEC
+        leader_rate = weights[leader_id] * BROADCASTS_PER_SEC
+        # Total rate of all followers except this specific one
+        other_follower_weights = [
+            weight
+            for id, weight in weights.items()
+            if id != leader_id and id != follower.id
+        ]
+        others_rate = sum(other_follower_weights) * BROADCASTS_PER_SEC
+        max_f_rate = max(other_follower_weights) * BROADCASTS_PER_SEC
+
+        # 3. Consensus Outcome Metrics (Re-using your analysis logic)
+        follower_proposals = 0
+        follower_collisions = 0
+        follower_leader_success = 0
+        follower_fast_path_success = 0
+        follower_other_success = 0
+
+        for slot in sorted(all_slots):
+            if follower.slots.get(slot) != follower.id:
+                continue
+
+            senders = [n.slots[slot] for n in nodes if slot in n.slots]
+            if len(senders) < num_nodes:
+                continue
+
+            follower_proposals += 1
+            counts = defaultdict(int)
+            for s in senders:
+                counts[s] += 1
+
+            if counts[leader_id] >= majority_quorum:
+                follower_leader_success += 1
+            elif counts[follower.id] >= fast_quorum:
+                follower_fast_path_success += 1
+            elif any(c >= fast_quorum for c in counts.values()):
+                follower_other_success += 1
+            else:
+                follower_collisions += 1
+
+        f_collision_pct = (
+            (follower_collisions / follower_proposals * 100)
+            if follower_proposals > 0
+            else 0
+        )
+
+        # 4. Write to CSV
+        writer.writerow(
+            [
+                round(lat_to_leader, 2),
+                round(lat_to_cq, 2),
+                round(lat_to_fq, 2),
+                round(lat_max, 2),
+                round(own_rate, 2),
+                round(leader_rate, 2),
+                round(others_rate, 2),
+                round(max_f_rate, 2),
+                follower_leader_success,
+                follower_fast_path_success,
+                follower_other_success,
+                follower_collisions,
+                round(f_collision_pct, 2),
+            ]
+        )
+
+        print(f"Metrics logged for Node {follower.id}")
+
+print(f"\nDone! Results saved to {csv_filename}")
