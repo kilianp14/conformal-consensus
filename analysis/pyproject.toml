@@ -10,4 +10,5 @@ dependencies = [
     "matplotlib>=3.10.8",
     "scipy>=1.17.0",
     "simpy>=4.1.1",
+    "tqdm>=4.67.3",
 ]
