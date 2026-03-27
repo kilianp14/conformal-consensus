@@ -19,13 +19,13 @@ import random
 import math
 import csv
 import os
-from collections import defaultdict
+from collections import defaultdict, Counter
 from tqdm import tqdm
 import itertools
 
 
 def initialize_network_latencies(
-    network, node_ids, global_base, min_pct=0.5, max_pct=1.5
+    network, node_ids, global_base, min_pct=0.2, max_pct=2.0
 ):
     for a, b in itertools.combinations(node_ids, 2):
         multiplier = random.uniform(min_pct, max_pct)
@@ -64,13 +64,22 @@ class Network:
 
 
 class Node:
-    def __init__(self, id, network):
+    def __init__(self, id, network, node_rate_per_sec):
         self.id = id
         self.network = network
         self.is_up = True
         self.network.add_node(self)
         self.slots = {}
         self._next_search_index = 0
+        self.avg_interval = (
+            (1000.0 / node_rate_per_sec) if node_rate_per_sec > 0 else None
+        )
+
+    def run_traffic(self, env):
+        while True:
+            jittered_interval = random.uniform(0, self.avg_interval * 2)
+            yield env.timeout(jittered_interval)
+            self.broadcast()
 
     def get_lowest_free_slot(self):
         while self._next_search_index in self.slots:
@@ -89,27 +98,6 @@ class Node:
             self.slots[slot] = sender_id
 
 
-def traffic_generator(env, nodes, total_rate_per_sec, weights):
-    # Generates broadcasts across the cluster.
-    # total_rate_per_sec: Total msgs/sec across all nodes.
-    # weights: per node percentage
-
-    # Timing (Simulation is in ms, so 1000ms / rate)
-    avg_interval = 1000.0 / total_rate_per_sec
-
-    weights = list(weights.values())
-
-    while True:
-        # Pick node based on weights
-        sender = random.choices(nodes, weights=weights, k=1)[0]
-        sender.broadcast()
-
-        # Jitter: Uniform distribution
-        jittered_interval = random.uniform(0, avg_interval * 2)
-
-        yield env.timeout(jittered_interval)
-
-
 def run_simulation(nodes_count, base_latency, broadcasts_per_sec, leader_pct, sim_time):
     env = simpy.Environment()
     net = Network(env)
@@ -119,85 +107,84 @@ def run_simulation(nodes_count, base_latency, broadcasts_per_sec, leader_pct, si
     majority_quorum = math.floor(nodes_count / 2 + 1)
     fast_quorum = math.ceil(3 * nodes_count / 4)
 
-    nodes = [Node(i, leader_id, net, majority_quorum, fast_quorum) for i in node_ids]
-    initialize_network_latencies(net, node_ids, global_base=base_latency)
-
-    # Compute weights
-    weights = {}
-    weights[0] = leader_pct
-
+    # Compute proposal_rates
+    proposal_rates = {}
+    proposal_rates[leader_id] = leader_pct * broadcasts_per_sec
     if nodes_count > 1:
         remaining_pct = 1.0 - leader_pct
         # Randomly distribute the rest among other nodes
         others = [random.random() for _ in range(nodes_count - 1)]
         total_others = sum(others)
         for id in node_ids[1:]:
-            weights[id] = (others[id - 1] / total_others) * remaining_pct
+            proposal_rates[id] = (
+                (others[id - 1] / total_others) * remaining_pct * broadcasts_per_sec
+            )
 
-    env.process(traffic_generator(env, nodes, broadcasts_per_sec, weights))
+    nodes = [Node(i, net, proposal_rates[i]) for i in node_ids]
+    initialize_network_latencies(net, node_ids, global_base=base_latency)
+    for node in nodes:
+        env.process(node.run_traffic(env))
+
     env.run(until=sim_time)
 
     # Evaluation
-    all_slots = set()
+    slot_votes = defaultdict(list)
+    follower_proposed_slots = defaultdict(set)
     for n in nodes:
-        all_slots.update(n.slots.keys())
+        for slot_id, sender_id in n.slots.items():
+            slot_votes[slot_id].append(sender_id)
+            if n.id == sender_id:
+                follower_proposed_slots[n.id].add(slot_id)
+
+    slot_outcomes = {}
+    for slot_id, votes in slot_votes.items():
+        if len(votes) < nodes_count:
+            slot_outcomes[slot_id] = -2  # Incomplete
+            continue
+        counts = Counter(votes)
+        if counts[leader_id] >= majority_quorum:
+            slot_outcomes[slot_id] = leader_id  # Leader Success
+        else:
+            # Check if anyone reached fast quorum
+            fast_path_winner = None
+            for s_id, count in counts.items():
+                if count >= fast_quorum:
+                    fast_path_winner = s_id
+                    break
+
+            if fast_path_winner is not None:
+                slot_outcomes[slot_id] = fast_path_winner
+            else:
+                slot_outcomes[slot_id] = -1  # Collision
 
     results = []
-
     for follower in [n for n in nodes if n.id != leader_id]:
-        all_lats = sorted([net.latencies[follower.id][tid] for tid in node_ids])
+        follower_id = follower.id
+        stats = {"prop": 0, "coll": 0, "lead": 0, "fast": 0, "other": 0}
 
-        # Metrics for CSV
-        f_proposals = 0
-        f_collisions = 0
-        f_leader_success = 0
-        f_fast_path_success = 0
-        f_other_success = 0
-
-        for slot in sorted(all_slots):
-            if follower.slots.get(slot) != follower.id:
+        for slot_id in follower_proposed_slots[follower_id]:
+            outcome = slot_outcomes[slot_id]
+            if outcome == -2:  # Incomplete
                 continue
+            if outcome == leader_id:  # Leader overwrite
+                stats["lead"] += 1
+            elif outcome == -1:  # Collision
+                stats["coll"] += 1
+            elif outcome == follower_id:  # Fast path success
+                stats["fast"] += 1
+            else:  # Other node succeeded
+                stats["other"] += 1
+            stats["prop"] += 1
 
-            senders = [n.slots[slot] for n in nodes if slot in n.slots]
-            if len(senders) < nodes_count:
-                continue
+        if stats["prop"] <= 0:
+            continue
 
-            f_proposals += 1
-            counts = defaultdict(int)
-            for s in senders:
-                counts[s] += 1
-
-            if counts[leader_id] >= majority_quorum:
-                f_leader_success += 1
-            elif counts[follower.id] >= fast_quorum:
-                f_fast_path_success += 1
-            elif any(c >= fast_quorum for c in counts.values()):
-                f_other_success += 1
-            else:
-                f_collisions += 1
-
-        collision_rate = (f_collisions / f_proposals * 100) if f_proposals > 0 else 0
-        success_rate = (
-            (f_fast_path_success / f_proposals * 100) if f_proposals > 0 else 0
-        )
-        leader_overwrite_rate = (
-            (f_leader_success / f_proposals * 100) if f_proposals > 0 else 0
-        )
-        follower_overwrite_rate = (
-            (f_other_success / f_proposals * 100) if f_proposals > 0 else 0
-        )
-
-        # Proposal rates
-        own_rate = weights[follower.id] * broadcasts_per_sec
-        leader_rate = weights[leader_id] * broadcasts_per_sec
-        other_follower_weights = [
-            weight
-            for id, weight in weights.items()
+        other_follower_rates = [
+            rate
+            for id, rate in proposal_rates.items()
             if id != leader_id and id != follower.id
         ]
-        others_rate = sum(other_follower_weights) * broadcasts_per_sec
-        max_f_rate = max(other_follower_weights) * broadcasts_per_sec
-
+        all_lats = sorted([net.latencies[follower.id][tid] for tid in node_ids])
         results.append(
             [
                 nodes_count,
@@ -205,26 +192,30 @@ def run_simulation(nodes_count, base_latency, broadcasts_per_sec, leader_pct, si
                 round(all_lats[majority_quorum - 1], 2),
                 round(all_lats[fast_quorum - 1], 2),
                 round(all_lats[-1], 2),
-                round(own_rate, 2),
-                round(leader_rate, 2),
-                round(others_rate, 2),
-                round(max_f_rate, 2),
-                round(success_rate, 2),
-                round(collision_rate, 2),
-                round(leader_overwrite_rate, 2),
-                round(follower_overwrite_rate, 2),
+                round(proposal_rates[follower.id], 2),
+                round(proposal_rates[leader_id], 2),
+                round(sum(other_follower_rates), 2),
+                round(max(other_follower_rates), 2),
+                round(stats["fast"] / stats["prop"], 4),
+                round(stats["coll"] / stats["prop"], 4),
+                round(stats["lead"] / stats["prop"], 4),
+                round(stats["other"] / stats["prop"], 4),
             ]
         )
     return results
 
 
-def log_sample(low, high):
-    # Samples from a logarithmic distribution.
-    return 10 ** random.uniform(math.log10(low), math.log10(high))
+def log_sample(low, high, intensity, invert=False):
+    log_low = math.log10(low)
+    log_high = math.log10(high)
+    if invert:
+        res_log = log_high - intensity * (log_high - log_low)
+    else:
+        res_log = log_low + intensity * (log_high - log_low)
+    return 10**res_log
 
 
-def batch_explorer(num_samples, sim_time_per_run):
-    csv_filename = "follower_metrics2.csv"
+def batch_explorer(csv_filename, num_samples):
     headers = [
         "number_of_nodes",
         "latency_to_leader",
@@ -235,8 +226,8 @@ def batch_explorer(num_samples, sim_time_per_run):
         "leader_proposals_per_sec",
         "other_followers_proposals_per_sec",
         "max_follower_proposals_per_sec",
-        "successful_rate_pct",
-        "collision_rate_pct",
+        "successful_rate",
+        "collision_rate",
         "leader_overwrite_rate",
         "follower_overwrite_rate",
     ]
@@ -247,13 +238,16 @@ def batch_explorer(num_samples, sim_time_per_run):
             csv.writer(f).writerow(headers)
 
     for s in tqdm(range(num_samples)):
-        # Sample parameters
+        proposal_intensity = random.uniform(0, 1)
+        lat_intensity = random.uniform(0, 1)
+
         n_nodes = random.randint(4, 8)
-        base_lat = log_sample(0.2, 200.0)
-        bps = log_sample(5, 50000)
+        bps = log_sample(5, 50000, proposal_intensity)
+        sim_time = log_sample(1000, 100000, proposal_intensity, invert=True)
+        base_lat = log_sample(0.2, 200, lat_intensity)
         leader_p = random.uniform(0.0, 1.0)
 
-        sim_results = run_simulation(n_nodes, base_lat, bps, leader_p, sim_time_per_run)
+        sim_results = run_simulation(n_nodes, base_lat, bps, leader_p, sim_time)
 
         with open(csv_filename, mode="a", newline="") as f:
             writer = csv.writer(f)
@@ -262,7 +256,7 @@ def batch_explorer(num_samples, sim_time_per_run):
 
 if __name__ == "__main__":
     NUM_PARAM_SETS = 10000  # Number of random parameter sets to try
-    SIM_TIME_PER_RUN = 3000  # ms per simulation
+    CSV_FILENAME = "follower_metrics3.csv"
 
-    batch_explorer(NUM_PARAM_SETS, SIM_TIME_PER_RUN)
-    print("\nSearch complete. Results appended to follower_metrics.csv")
+    batch_explorer(CSV_FILENAME, NUM_PARAM_SETS)
+    print(f"\nSearch complete. Results appended to {CSV_FILENAME}")
