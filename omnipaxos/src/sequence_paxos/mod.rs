@@ -3,8 +3,8 @@ use crate::utils::create_logger;
 use crate::{
     sequence_paxos::{log::MemoryStorage, utils::LeaderState},
     utils::{
-        defaults::DEFAULT_MODE, AcceptStatus, Ballot, Entry, EntryId, FlexibleQuorum, LogEntry,
-        Mode, NodeId, Phase, Quorum, Role, SequenceNumber,
+        AcceptStatus, Ballot, Entry, EntryId, FlexibleQuorum, LogEntry, Mode, NodeId, Phase,
+        Quorum, Role, SequenceNumber,
     },
     OmniPaxosConfig,
 };
@@ -118,7 +118,6 @@ where
             num_nodes
         );
         let outgoing = Vec::with_capacity(config.buffer_size);
-        let mode = DEFAULT_MODE;
         let mut paxos = SequencePaxos {
             internal_storage: MemoryStorage::new(),
             pid,
@@ -130,7 +129,7 @@ where
             leader_state: LeaderState::<T>::with(leader, num_nodes, quorum_size, super_quorum_size),
             cached_promise_message: None,
             current_seq_num: SequenceNumber::default(),
-            mode,
+            mode: Mode::OmniPaxos,
             #[cfg(feature = "logging")]
             logger: {
                 if let Some(logger) = config.custom_logger {

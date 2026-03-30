@@ -1,3 +1,9 @@
+#[cfg(feature = "adaptive")]
+use std::{
+    collections::{HashMap, VecDeque},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
 /// Ballot Leader Election algorithm for electing new leaders
 use crate::utils::{defaults::*, FlexibleQuorum, Phase, Quorum, Role};
 
@@ -13,8 +19,6 @@ use slog::{info, trace, Logger};
 /// The different messages used by the BallotLeaderElection layer
 pub mod messages;
 use messages::*;
-
-const INITIAL_ROUND: u32 = 1;
 
 /// A Ballot Leader Election component. Used in conjunction with OmniPaxos to handle the election of a leader for a cluster of OmniPaxos servers,
 /// incoming messages and produces outgoing messages that the user has to fetch periodically and send using a network implementation.
@@ -42,6 +46,12 @@ pub(crate) struct BallotLeaderElection {
     quorum: Quorum,
     /// Vector which holds all the outgoing messages of the BLE instance.
     outgoing: Vec<BLEMessage>,
+    /// Per-node rolling window of one-way latencies (RTT / 2) in microseconds.
+    #[cfg(feature = "adaptive")]
+    latency_histories: HashMap<NodeId, VecDeque<f64>>,
+    /// Maximum size of the rolling window.
+    #[cfg(feature = "adaptive")]
+    latency_window_size: usize,
     /// Logger used to output the status of the component.
     #[cfg(feature = "logging")]
     logger: Logger,
@@ -54,8 +64,13 @@ impl BallotLeaderElection {
         let peers = config.peers;
         let num_nodes = &peers.len() + 1;
         let quorum = Quorum::with(config.flexible_quorum, num_nodes);
-        let initial_ballot = Ballot::with(INITIAL_ROUND, config.priority, pid);
+        let initial_ballot = Ballot::with(1, config.priority, pid);
         let initial_leader = initial_ballot;
+        #[cfg(feature = "adaptive")]
+        let latency_histories = peers
+            .iter()
+            .map(|&id| (id, VecDeque::with_capacity(config.latency_window_size)))
+            .collect();
         let mut ble = BallotLeaderElection {
             pid,
             peers,
@@ -67,6 +82,10 @@ impl BallotLeaderElection {
             happy: true,
             quorum,
             outgoing: Vec::with_capacity(config.buffer_size),
+            #[cfg(feature = "adaptive")]
+            latency_histories,
+            #[cfg(feature = "adaptive")]
+            latency_window_size: config.latency_window_size,
             #[cfg(feature = "logging")]
             logger: {
                 if let Some(logger) = config.custom_logger {
@@ -107,7 +126,7 @@ impl BallotLeaderElection {
     pub(crate) fn handle(&mut self, m: BLEMessage) {
         match m.msg {
             HeartbeatMsg::Request(req) => self.handle_request(m.from, req),
-            HeartbeatMsg::Reply(rep) => self.handle_reply(rep),
+            HeartbeatMsg::Reply(rep) => self.handle_reply(m.from, rep),
         }
     }
 
@@ -124,6 +143,11 @@ impl BallotLeaderElection {
         for peer in &self.peers {
             let hb_request = HeartbeatRequest {
                 round: self.hb_round,
+                #[cfg(feature = "adaptive")]
+                sent_at: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_micros() as u64,
             };
             self.outgoing.push(BLEMessage {
                 from: self.pid,
@@ -219,6 +243,8 @@ impl BallotLeaderElection {
             ballot: self.current_ballot,
             leader: self.leader,
             happy: self.happy,
+            #[cfg(feature = "adaptive")]
+            sent_at: req.sent_at, // Echo the timestamp
         };
         self.outgoing.push(BLEMessage {
             from: self.pid,
@@ -227,14 +253,43 @@ impl BallotLeaderElection {
         });
     }
 
-    fn handle_reply(&mut self, rep: HeartbeatReply) {
+    fn handle_reply(&mut self, from: NodeId, rep: HeartbeatReply) {
         if rep.round == self.hb_round {
+            #[cfg(feature = "adaptive")]
+            {
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_micros() as u64;
+                let rtt = (now - rep.sent_at) as f64;
+                let one_way_millis = rtt / 2000.0;
+
+                if let Some(history) = self.latency_histories.get_mut(&from) {
+                    if history.len() >= self.latency_window_size {
+                        history.pop_front();
+                    }
+                    history.push_back(one_way_millis);
+                }
+            }
             self.heartbeat_replies.push(rep);
         }
     }
 
     pub(crate) fn get_current_ballot(&self) -> Ballot {
         self.current_ballot
+    }
+
+    /// Returns the rolling average of one-way latency for a specific node in millis
+    #[cfg(feature = "adaptive")]
+    pub fn get_node_latency_avg(&self, node_id: NodeId) -> Option<f64> {
+        self.latency_histories.get(&node_id).and_then(|history| {
+            if history.is_empty() {
+                None
+            } else {
+                let sum: f64 = history.iter().sum();
+                Some(sum / history.len() as f64)
+            }
+        })
     }
 }
 
@@ -254,6 +309,8 @@ pub(crate) struct BLEConfig {
     priority: u32,
     flexible_quorum: Option<FlexibleQuorum>,
     buffer_size: usize,
+    #[cfg(feature = "adaptive")]
+    pub latency_window_size: usize,
     #[cfg(feature = "logging")]
     logger_file_path: Option<String>,
     #[cfg(feature = "logging")]
@@ -276,6 +333,8 @@ impl From<OmniPaxosConfig> for BLEConfig {
             priority: config.server_config.leader_priority,
             flexible_quorum: config.cluster_config.flexible_quorum,
             buffer_size: BLE_BUFFER_SIZE,
+            #[cfg(feature = "adaptive")]
+            latency_window_size: LATENCY_TRACKING_WINDOW_SIZE,
             #[cfg(feature = "logging")]
             logger_file_path: config.server_config.logger_file_path,
             #[cfg(feature = "logging")]

@@ -54,13 +54,12 @@ impl<T: PartialEq + Entry> PartialEq for LogEntry<T> {
 }
 
 pub(crate) mod defaults {
-    use super::Mode;
-
     pub(crate) const BUFFER_SIZE: usize = 100000;
     pub(crate) const BLE_BUFFER_SIZE: usize = 100;
+    #[cfg(feature = "adaptive")]
+    pub(crate) const LATENCY_TRACKING_WINDOW_SIZE: usize = 10;
     pub(crate) const ELECTION_TIMEOUT: u64 = 1;
     pub(crate) const RESEND_MESSAGE_TIMEOUT: u64 = 100;
-    pub(crate) const DEFAULT_MODE: Mode = Mode::OmniPaxos;
 }
 
 /// Used for checking the ordering of message sequences in the accept phase
