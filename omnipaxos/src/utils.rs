@@ -151,53 +151,29 @@ impl LogicalClock {
     }
 }
 
-/// Flexible quorums can be used to increase/decrease the read and write quorum sizes,
-/// for different latency vs fault tolerance tradeoffs.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(any(feature = "serde", feature = "toml_config"), derive(Deserialize))]
-#[cfg_attr(feature = "serde", derive(Serialize))]
-pub struct FlexibleQuorum {
-    /// The number of nodes a leader needs to consult to get an up-to-date view of the log.
-    pub read_quorum_size: usize,
-    /// The number of acknowledgments a leader needs to commit an entry to the log
-    pub write_quorum_size: usize,
-}
-
 /// The type of quorum used by the OmniPaxos cluster.
 #[derive(Copy, Clone, Debug)]
-pub(crate) enum Quorum {
-    /// Both the read quorum and the write quorums are a majority of nodes
-    Majority(usize),
-    /// The read and write quorum sizes are defined by a `FlexibleQuorum`
-    Flexible(FlexibleQuorum),
+pub(crate) struct Quorum {
+    /// Majority of nodes
+    majority_quorum: usize,
+    /// Number of nodes for successful fast round
+    fast_quorum: usize,
 }
 
 impl Quorum {
-    pub(crate) fn with(flexible_quorum_config: Option<FlexibleQuorum>, num_nodes: usize) -> Self {
-        match flexible_quorum_config {
-            Some(FlexibleQuorum {
-                read_quorum_size,
-                write_quorum_size,
-            }) => Quorum::Flexible(FlexibleQuorum {
-                read_quorum_size,
-                write_quorum_size,
-            }),
-            None => Quorum::Majority(num_nodes / 2 + 1),
+    pub(crate) fn with(num_nodes: usize) -> Self {
+        Self {
+            majority_quorum: num_nodes / 2 + 1,
+            fast_quorum: (num_nodes * 3).div_ceil(4),
         }
     }
 
-    pub(crate) fn is_prepare_quorum(&self, num_nodes: usize) -> bool {
-        match self {
-            Quorum::Majority(majority) => num_nodes >= *majority,
-            Quorum::Flexible(flex_quorum) => num_nodes >= flex_quorum.read_quorum_size,
-        }
+    pub(crate) fn is_majority_quorum(&self, num_nodes: usize) -> bool {
+        num_nodes >= self.majority_quorum
     }
 
-    pub(crate) fn is_accept_quorum(&self, num_nodes: usize) -> bool {
-        match self {
-            Quorum::Majority(majority) => num_nodes >= *majority,
-            Quorum::Flexible(flex_quorum) => num_nodes >= flex_quorum.write_quorum_size,
-        }
+    pub(crate) fn is_fast_quorum(&self, num_nodes: usize) -> bool {
+        num_nodes >= self.fast_quorum
     }
 }
 

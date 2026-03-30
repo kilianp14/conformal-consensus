@@ -3,8 +3,7 @@ use crate::utils::create_logger;
 use crate::{
     sequence_paxos::{log::MemoryStorage, utils::LeaderState},
     utils::{
-        AcceptStatus, Ballot, Entry, EntryId, FlexibleQuorum, LogEntry, Mode, NodeId, Phase,
-        Quorum, Role, SequenceNumber,
+        AcceptStatus, Ballot, Entry, EntryId, LogEntry, Mode, NodeId, Phase, Role, SequenceNumber,
     },
     OmniPaxosConfig,
 };
@@ -27,7 +26,6 @@ use messages::*;
 /// # Fields
 /// * `pid`: The unique identifier of this node. Must not be 0.
 /// * `peers`: The peers of this node i.e. the `pid`s of the other servers in the configuration.
-/// * `flexible_quorum` : Defines read and write quorum sizes. Can be used for different latency vs fault tolerance tradeoffs.
 /// * `buffer_size`: The buffer size for outgoing messages.
 /// * `batch_size`: The size of the buffer for log batching. The default is 1, which means no batching.
 /// * `logger_file_path`: The path where the default logger logs events.
@@ -36,7 +34,6 @@ pub(crate) struct SequencePaxosConfig {
     pid: NodeId,
     peers: Vec<NodeId>,
     buffer_size: usize,
-    flexible_quorum: Option<FlexibleQuorum>,
     #[cfg(feature = "logging")]
     logger_file_path: Option<String>,
     #[cfg(feature = "logging")]
@@ -55,7 +52,6 @@ impl From<OmniPaxosConfig> for SequencePaxosConfig {
         SequencePaxosConfig {
             pid,
             peers,
-            flexible_quorum: config.cluster_config.flexible_quorum,
             buffer_size: config.server_config.buffer_size,
             #[cfg(feature = "logging")]
             logger_file_path: config.server_config.logger_file_path,
@@ -100,23 +96,7 @@ where
         let pid = config.pid;
         let peers = config.peers;
         let num_nodes = &peers.len() + 1;
-        let quorum = Quorum::with(config.flexible_quorum, num_nodes);
-        let quorum_size = match quorum {
-            Quorum::Majority(m) => m,
-            Quorum::Flexible(_) => unimplemented!(),
-        };
-        let super_quorum_size = {
-            let sq = (num_nodes * 3).div_ceil(4);
-            std::cmp::min(num_nodes, sq)
-        };
         let leader = Ballot::default();
-        assert!(
-            quorum_size < super_quorum_size,
-            "Quorum size: {} must be less than super quorum size: {}. N: {}",
-            quorum_size,
-            super_quorum_size,
-            num_nodes
-        );
         let outgoing = Vec::with_capacity(config.buffer_size);
         let mut paxos = SequencePaxos {
             internal_storage: MemoryStorage::new(),
@@ -126,7 +106,7 @@ where
             buffered_proposals: vec![],
             entry_id: (pid, 0),
             outgoing,
-            leader_state: LeaderState::<T>::with(leader, num_nodes, quorum_size, super_quorum_size),
+            leader_state: LeaderState::<T>::with(leader, num_nodes),
             cached_promise_message: None,
             current_seq_num: SequenceNumber::default(),
             mode: Mode::OmniPaxos,
@@ -145,13 +125,7 @@ where
         paxos.internal_storage.set_promise(leader);
         #[cfg(feature = "logging")]
         {
-            info!(
-                paxos.logger,
-                "Paxos component pid: {} created!. Q: {}, SQ: {}",
-                pid,
-                quorum_size,
-                super_quorum_size
-            );
+            info!(paxos.logger, "Paxos component pid: {} created!", pid,);
         }
         paxos
     }

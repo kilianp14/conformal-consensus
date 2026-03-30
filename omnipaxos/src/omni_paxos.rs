@@ -6,7 +6,7 @@ use crate::{
     sequence_paxos::SequencePaxos,
     utils::{
         defaults::{BUFFER_SIZE, ELECTION_TIMEOUT, RESEND_MESSAGE_TIMEOUT},
-        Ballot, Entry, FlexibleQuorum, LogEntry, LogicalClock, NodeId, Phase,
+        Ballot, Entry, LogEntry, LogicalClock, NodeId, Phase,
     },
 };
 #[cfg(any(feature = "toml_config", feature = "serde"))]
@@ -75,9 +75,7 @@ impl OmniPaxosConfig {
 
 /// Configuration for an `OmniPaxos` cluster.
 /// # Fields
-/// * `configuration_id`: The identifier for the cluster configuration that this OmniPaxos server is part of.
 /// * `nodes`: The nodes in the cluster i.e. the `pid`s of the other servers in the configuration.
-/// * `flexible_quorum` : Defines read and write quorum sizes. Can be used for different latency vs fault tolerance tradeoffs.
 #[derive(Clone, Debug, PartialEq, Default)]
 #[cfg_attr(any(feature = "serde", feature = "toml_config"), derive(Deserialize))]
 #[cfg_attr(feature = "toml_config", serde(default))]
@@ -85,8 +83,6 @@ impl OmniPaxosConfig {
 pub struct ClusterConfig {
     /// The nodes in the cluster i.e. the `pid`s of the servers in the configuration.
     pub nodes: Vec<NodeId>,
-    /// Defines read and write quorum sizes. Can be used for different latency vs fault tolerance tradeoffs.
-    pub flexible_quorum: Option<FlexibleQuorum>,
 }
 
 impl ClusterConfig {
@@ -94,28 +90,6 @@ impl ClusterConfig {
     pub fn validate(&self) -> Result<(), ConfigError> {
         let num_nodes = self.nodes.len();
         valid_config!(num_nodes > 1, "Need more than 1 node");
-        if let Some(FlexibleQuorum {
-            read_quorum_size,
-            write_quorum_size,
-        }) = self.flexible_quorum
-        {
-            valid_config!(
-                read_quorum_size + write_quorum_size > num_nodes,
-                "The quorums must overlap i.e., the sum of their sizes must exceed the # of nodes"
-            );
-            valid_config!(
-                read_quorum_size >= 2 && read_quorum_size <= num_nodes,
-                "Read quorum must be in range 2 to # of nodes in the cluster"
-            );
-            valid_config!(
-                write_quorum_size >= 2 && write_quorum_size <= num_nodes,
-                "Write quorum must be in range 2 to # of nodes in the cluster"
-            );
-            valid_config!(
-                read_quorum_size >= write_quorum_size,
-                "Read quorum size must be >= the write quorum size."
-            );
-        }
         Ok(())
     }
 
@@ -142,7 +116,6 @@ impl ClusterConfig {
 /// * `election_tick_timeout`: The number of calls to `tick()` before leader election is updated. If this is set to 5 and `tick()` is called every 10ms, then the election timeout will be 50ms. Must not be 0.
 /// * `resend_message_tick_timeout`: The number of calls to `tick()` before a message is considered dropped and thus resent. Must not be 0.
 /// * `buffer_size`: The buffer size for outgoing messages.
-/// * `batch_size`: The size of the buffer for log batching. The default is 1, which means no batching.
 /// * `logger_file_path`: The path where the default logger logs events.
 /// * `leader_priority` : Custom priority for this node to be elected as the leader.
 #[derive(Clone, Debug)]
@@ -328,10 +301,7 @@ where
     /// It is also used for the election process, where the server checks if it can become the leader.
     /// For instance if `election_timeout()` is called every 100ms, then if the leader fails, the servers will detect it after 100ms and elect a new server after another 100ms if possible.
     fn election_timeout(&mut self) {
-        if let Some(new_leader) = self
-            .ble
-            .hb_timeout(self.seq_paxos.get_state(), self.get_promise())
-        {
+        if let Some(new_leader) = self.ble.hb_timeout(self.get_promise()) {
             self.seq_paxos.handle_leader(new_leader);
         }
     }

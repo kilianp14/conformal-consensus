@@ -1,7 +1,7 @@
 #![cfg(feature = "toml_config")]
 pub mod utils;
 
-use omnipaxos::{utils::FlexibleQuorum, OmniPaxosConfig};
+use omnipaxos::OmniPaxosConfig;
 use serial_test::serial;
 use utils::Value;
 
@@ -16,13 +16,6 @@ fn config_all_fields_test() {
         Err(e) => panic!("{e}"),
         Ok(config) => {
             assert_eq!(config.cluster_config.nodes, vec![1, 2, 3, 4, 5]);
-            assert_eq!(
-                config.cluster_config.flexible_quorum,
-                Some(FlexibleQuorum {
-                    read_quorum_size: 4,
-                    write_quorum_size: 2
-                })
-            );
             assert_eq!(config.server_config.pid, 1);
             assert_eq!(config.server_config.election_tick_timeout, 10);
             assert_eq!(config.server_config.resend_message_tick_timeout, 100);

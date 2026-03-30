@@ -22,12 +22,7 @@ where
         #[cfg(feature = "logging")]
         info!(self.logger, "Newly elected leader: {:?}", n);
         if self.pid == n.pid {
-            self.leader_state = LeaderState::with(
-                n,
-                self.peers.len() + 1,
-                self.leader_state.quorum_size,
-                self.leader_state.super_quorum_size,
-            );
+            self.leader_state = LeaderState::with(n, self.peers.len() + 1);
             /* insert my promise */
             self.internal_storage.set_promise(n);
             let decided_idx = self.internal_storage.get_decided_idx();

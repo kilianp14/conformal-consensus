@@ -3,7 +3,7 @@ use kompact::{config_keys::system, executors::crossbeam_workstealing_pool, prelu
 use omnipaxos::{
     macros::*,
     messages::Message,
-    utils::{Ballot, FlexibleQuorum, NodeId},
+    utils::{Ballot, NodeId},
     ClusterConfig, OmniPaxosConfig, ServerConfig,
 };
 use serde::{Deserialize, Deserializer, Serialize};
@@ -63,16 +63,7 @@ impl TestConfig {
 
     pub fn into_omnipaxos_config(&self, pid: NodeId) -> OmniPaxosConfig {
         let all_pids: Vec<NodeId> = (1..=self.num_nodes as NodeId).collect();
-        let flexible_quorum = self
-            .flexible_quorum
-            .map(|(read_quorum_size, write_quorum_size)| FlexibleQuorum {
-                read_quorum_size,
-                write_quorum_size,
-            });
-        let cluster_config = ClusterConfig {
-            nodes: all_pids,
-            flexible_quorum,
-        };
+        let cluster_config = ClusterConfig { nodes: all_pids };
         let server_config = ServerConfig {
             pid,
             election_tick_timeout: 1,

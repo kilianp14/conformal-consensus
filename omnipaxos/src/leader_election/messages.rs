@@ -1,8 +1,6 @@
 use crate::utils::{Ballot, NodeId};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "adaptive")]
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// An enum for all the different BLE message types.
 #[allow(missing_docs)]

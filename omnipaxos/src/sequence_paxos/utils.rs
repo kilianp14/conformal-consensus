@@ -1,4 +1,6 @@
-use crate::utils::{AcceptStatus, Ballot, Entry, EntryId, LogEntry, NodeId, SequenceNumber};
+use crate::utils::{
+    AcceptStatus, Ballot, Entry, EntryId, LogEntry, NodeId, Quorum, SequenceNumber,
+};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -70,22 +72,15 @@ where
     accept_meta: HashMap<SlotId, HashMap<NodeId, (EntryId, AcceptStatus)>>,
     /// Tracks the current state of each slot to detect transitions
     slot_results: HashMap<SlotId, SlotResult>,
-    // Majority quorum size
-    pub(crate) quorum_size: usize,
-    // Fast quorum size
-    pub(crate) super_quorum_size: usize,
+    // Quorums
+    pub(crate) quorum: Quorum,
 }
 
 impl<T> LeaderState<T>
 where
     T: Entry,
 {
-    pub(crate) fn with(
-        n_leader: Ballot,
-        n_nodes: usize,
-        quorum_size: usize,
-        super_quorum_size: usize,
-    ) -> Self {
+    pub(crate) fn with(n_leader: Ballot, n_nodes: usize) -> Self {
         Self {
             n_leader,
             promises_meta: HashMap::with_capacity(n_nodes),
@@ -94,8 +89,7 @@ where
             entries: HashMap::new(),
             accept_meta: HashMap::new(),
             slot_results: HashMap::new(),
-            quorum_size,
-            super_quorum_size,
+            quorum: Quorum::with(n_nodes),
         }
     }
 
@@ -131,7 +125,7 @@ where
         // all of the followers log-syncs start directly after the leaders decided_idx
         self.log_syncs.insert(from, log_sync);
         let num_promised = self.get_promised_count();
-        num_promised >= self.quorum_size
+        self.quorum.is_majority_quorum(num_promised)
     }
 
     pub(crate) fn reset_promise(&mut self, pid: NodeId) {
@@ -341,7 +335,7 @@ where
         };
         // Not enough votes
         let total_votes_in_slot = proposals.len();
-        if total_votes_in_slot < self.quorum_size {
+        if !self.quorum.is_majority_quorum(total_votes_in_slot) {
             return SlotResult::Pending;
         }
 
@@ -364,7 +358,9 @@ where
 
         // Check if we can make a decision
         if let Some((entry_id, (op, _fast, slow, total_for_entry))) = winner {
-            if total_for_entry >= self.super_quorum_size || op + slow >= self.quorum_size {
+            if self.quorum.is_fast_quorum(total_for_entry)
+                || self.quorum.is_majority_quorum(op + slow)
+            {
                 return SlotResult::Decided(entry_id);
             }
             // Collision
@@ -416,12 +412,12 @@ mod tests {
         impl Entry for Value {}
 
         let nodes = vec![6, 7, 8];
-        let leader_state = LeaderState::<Value>::with(Ballot::with(1, 1, 8), 3, 2, 3);
+        let leader_state = LeaderState::<Value>::with(Ballot::with(1, 1, 8), 3);
         let prep_peers = leader_state.get_preparable_peers(&nodes);
         assert_eq!(prep_peers, nodes);
 
         let nodes = vec![7, 1, 100, 4, 6];
-        let leader_state = LeaderState::<Value>::with(Ballot::with(1, 1, 100), 3, 3, 4);
+        let leader_state = LeaderState::<Value>::with(Ballot::with(1, 1, 100), 3);
         let prep_peers = leader_state.get_preparable_peers(&nodes);
         assert_eq!(prep_peers, nodes);
     }

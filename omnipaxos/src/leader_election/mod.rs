@@ -5,7 +5,7 @@ use std::{
 };
 
 /// Ballot Leader Election algorithm for electing new leaders
-use crate::utils::{defaults::*, FlexibleQuorum, Phase, Quorum, Role};
+use crate::utils::{defaults::*, Quorum};
 
 #[cfg(feature = "logging")]
 use crate::utils::create_logger;
@@ -63,7 +63,7 @@ impl BallotLeaderElection {
         let pid = config.pid;
         let peers = config.peers;
         let num_nodes = &peers.len() + 1;
-        let quorum = Quorum::with(config.flexible_quorum, num_nodes);
+        let quorum = Quorum::with(num_nodes);
         let initial_ballot = Ballot::with(1, config.priority, pid);
         let initial_leader = initial_ballot;
         #[cfg(feature = "adaptive")]
@@ -158,13 +158,9 @@ impl BallotLeaderElection {
     }
 
     /// End of a heartbeat round. Returns current leader and election status.
-    pub(crate) fn hb_timeout(
-        &mut self,
-        seq_paxos_state: &(Role, Phase),
-        seq_paxos_promise: Ballot,
-    ) -> Option<Ballot> {
+    pub(crate) fn hb_timeout(&mut self, seq_paxos_promise: Ballot) -> Option<Ballot> {
         self.update_leader();
-        self.update_happiness(seq_paxos_state);
+        self.update_happiness();
         self.check_takeover();
         self.new_hb_round();
         if seq_paxos_promise > self.leader {
@@ -192,19 +188,14 @@ impl BallotLeaderElection {
         }
     }
 
-    fn update_happiness(&mut self, seq_paxos_state: &(Role, Phase)) {
+    fn update_happiness(&mut self) {
         self.happy = if self.leader == self.current_ballot {
             let potential_followers = self
                 .heartbeat_replies
                 .iter()
                 .filter(|hb_reply| hb_reply.leader <= self.current_ballot)
                 .count();
-            let can_form_quorum = match seq_paxos_state {
-                (Role::Leader, Phase::Accept) => {
-                    self.quorum.is_accept_quorum(potential_followers + 1)
-                }
-                _ => self.quorum.is_prepare_quorum(potential_followers + 1),
-            };
+            let can_form_quorum = self.quorum.is_majority_quorum(potential_followers + 1);
             if can_form_quorum {
                 true
             } else {
@@ -226,7 +217,7 @@ impl BallotLeaderElection {
             let all_neighbors_unhappy = self.heartbeat_replies.iter().all(|r| !r.happy);
             let im_quorum_connected = self
                 .quorum
-                .is_prepare_quorum(self.heartbeat_replies.len() + 1);
+                .is_majority_quorum(self.heartbeat_replies.len() + 1);
             if all_neighbors_unhappy && im_quorum_connected {
                 // We increment past our leader instead of max of unhappy ballots because we
                 // assume we have already checked leader for this round so they should be equal
@@ -299,7 +290,6 @@ impl BallotLeaderElection {
 /// * `pid`: The unique identifier of this node. Must not be 0.
 /// * `peers`: The peers of this node i.e. the `pid`s of the other servers in the configuration.
 /// * `priority`: Set custom priority for this node to be elected as the leader.
-/// * `flexible_quorum` : Defines read and write quorum sizes. Can be used for different latency vs fault tolerance tradeoffs.
 /// * `buffer_size`: The buffer size for outgoing messages.
 /// * `logger_file_path`: The path where the default logger logs events.
 #[derive(Clone, Debug)]
@@ -307,10 +297,9 @@ pub(crate) struct BLEConfig {
     pid: NodeId,
     peers: Vec<NodeId>,
     priority: u32,
-    flexible_quorum: Option<FlexibleQuorum>,
     buffer_size: usize,
     #[cfg(feature = "adaptive")]
-    pub latency_window_size: usize,
+    latency_window_size: usize,
     #[cfg(feature = "logging")]
     logger_file_path: Option<String>,
     #[cfg(feature = "logging")]
@@ -331,7 +320,6 @@ impl From<OmniPaxosConfig> for BLEConfig {
             pid,
             peers,
             priority: config.server_config.leader_priority,
-            flexible_quorum: config.cluster_config.flexible_quorum,
             buffer_size: BLE_BUFFER_SIZE,
             #[cfg(feature = "adaptive")]
             latency_window_size: LATENCY_TRACKING_WINDOW_SIZE,
