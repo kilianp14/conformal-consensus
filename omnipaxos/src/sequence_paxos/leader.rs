@@ -4,7 +4,7 @@ use crate::{
         utils::{LeaderAction, LeaderState, LogSync},
         Promise, SequencePaxos,
     },
-    utils::{AcceptStatus, Ballot, Entry, EntryId, LogEntry, Mode, NodeId, Phase, Role},
+    utils::{AcceptStatus, Ballot, Entry, EntryId, LogEntry, NodeId, Phase, Role},
 };
 #[cfg(feature = "logging")]
 use slog::{debug, info};
@@ -77,10 +77,7 @@ where
             );
             if received_majority {
                 self.state = (Role::Leader, Phase::Accept);
-                let status = match self.mode {
-                    Mode::OmniPaxos => AcceptStatus::OpAccepted,
-                    Mode::FastPaxos => AcceptStatus::FpSlowAccepted,
-                };
+                let status = AcceptStatus::OpAccepted;
                 let decided_idx = self.internal_storage.get_decided_idx();
                 let (max_promise_sync, new_decided_idx) =
                     self.leader_state.take_my_log_sync(decided_idx, status);
@@ -139,6 +136,7 @@ where
             entry.1.clone(),
             accept_status,
         ));
+        self.pending_proposals.insert(slot_idx, entry.clone());
 
         // Send Accept messages
         for pid in self.leader_state.get_promised_followers() {
@@ -216,7 +214,15 @@ where
                         self.send_msg_to(pid, PaxosMsg::Decide(d));
                     }
                     self.internal_storage
-                        .insert_at_index(slot_idx, LogEntry::Decided(entry));
+                        .insert_at_index(slot_idx, LogEntry::Decided(entry.1));
+                    if let Some(own_proposed_entry_at_slot) =
+                        self.pending_proposals.remove(&slot_idx)
+                    {
+                        if own_proposed_entry_at_slot.0 != entry.0 {
+                            // The slot was taken by another entry; retry our proposal
+                            self.try_append(own_proposed_entry_at_slot);
+                        }
+                    }
                 }
                 self.internal_storage.set_decided_idx(new_decided_index);
             }

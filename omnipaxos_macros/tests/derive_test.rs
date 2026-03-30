@@ -10,7 +10,6 @@ fn build_op_test() {
 
     let cluster_config = ClusterConfig {
         nodes: vec![1, 2, 3],
-        ..Default::default()
     };
     let server_config = ServerConfig {
         pid: 1,

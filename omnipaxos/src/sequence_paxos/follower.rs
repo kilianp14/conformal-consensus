@@ -1,7 +1,8 @@
 use crate::{
     sequence_paxos::{messages::*, utils::LogSync, Promise, SequencePaxos},
     utils::{
-        AcceptStatus, Ballot, Entry, LogEntry, MessageStatus, NodeId, Phase, Role, SequenceNumber,
+        AcceptStatus, Ballot, Entry, EntryId, LogEntry, MessageStatus, NodeId, Phase, Role,
+        SequenceNumber,
     },
 };
 #[cfg(feature = "logging")]
@@ -72,6 +73,43 @@ where
         }
     }
 
+    pub(crate) fn fp_fast_propose(&mut self, entry: (EntryId, T)) {
+        let accept_status = AcceptStatus::FpFastAccepted;
+        // Add to storage
+        let slot_idx = self.internal_storage.add_entry(LogEntry::Undecided(
+            entry.0,
+            entry.1.clone(),
+            accept_status,
+        ));
+
+        // Send fast accept to all peers
+        let acc = Accept {
+            n: self.internal_storage.get_promise(),
+            seq_num: SequenceNumber::default(), // not needed for fast path
+            entry: entry.clone(),
+            slot_idx,
+            accept_status,
+        };
+        self.send_to_all_peers(PaxosMsg::Accept(acc));
+        self.pending_proposals.insert(slot_idx, entry.clone());
+
+        // Send own accepted to leader or handle if I am leader
+        let accepted = Accepted {
+            n: self.internal_storage.get_promise(),
+            slot_idx,
+            entry,
+            accept_status,
+        };
+        match self.state.0 {
+            Role::Follower => {
+                self.send_msg_to(self.get_current_leader(), PaxosMsg::Accepted(accepted));
+            }
+            Role::Leader => {
+                self.handle_accepted(accepted, self.pid);
+            }
+        }
+    }
+
     pub(crate) fn handle_fast_accept(&mut self, acc: Accept<T>) {
         if self.check_valid_ballot(acc.n)
             && self.state.1 == Phase::Accept
@@ -80,7 +118,7 @@ where
         {
             #[cfg(feature = "logging")]
             {
-                info!(
+                debug!(
                     self.logger,
                     "Pid {}. Incoming Fast Accept: {:?}", self.pid, acc
                 );
@@ -114,7 +152,7 @@ where
         {
             #[cfg(feature = "logging")]
             {
-                info!(
+                debug!(
                     self.logger,
                     "Pid {}. Incoming Slow Accept: {:?}", self.pid, acc
                 );
@@ -140,10 +178,16 @@ where
         {
             #[cfg(feature = "logging")]
             {
-                info!(self.logger, "Pid {}. Incoming Decide: {:?}", self.pid, dec);
+                debug!(self.logger, "Pid {}. Incoming Decide: {:?}", self.pid, dec);
+            }
+            if let Some(own_proposed_entry_at_slot) = self.pending_proposals.remove(&dec.slot_idx) {
+                if own_proposed_entry_at_slot.0 != dec.entry.0 {
+                    // The slot was taken by another entry; retry our proposal
+                    self.try_append(own_proposed_entry_at_slot);
+                }
             }
             self.internal_storage
-                .insert_at_index(dec.slot_idx, LogEntry::Decided(dec.entry));
+                .insert_at_index(dec.slot_idx, LogEntry::Decided(dec.entry.1));
             if dec.slot_idx >= self.internal_storage.get_decided_idx() {
                 self.internal_storage.set_decided_idx(dec.slot_idx + 1);
             }

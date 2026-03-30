@@ -1,15 +1,16 @@
 #[cfg(feature = "logging")]
 use crate::utils::create_logger;
 use crate::{
-    sequence_paxos::{log::MemoryStorage, utils::LeaderState},
-    utils::{
-        AcceptStatus, Ballot, Entry, EntryId, LogEntry, Mode, NodeId, Phase, Role, SequenceNumber,
+    sequence_paxos::{
+        log::MemoryStorage,
+        utils::{LeaderState, SlotId},
     },
+    utils::{AcceptStatus, Ballot, Entry, EntryId, Mode, NodeId, Phase, Role, SequenceNumber},
     OmniPaxosConfig,
 };
 #[cfg(feature = "logging")]
 use slog::{info, Logger};
-use std::{fmt::Debug, vec};
+use std::{collections::HashMap, fmt::Debug, vec};
 
 mod follower;
 mod leader;
@@ -74,7 +75,10 @@ where
     state: (Role, Phase),
     // Used to differ between concurrent proposals of the same entry
     entry_id: EntryId,
+    // Incoming proposals while node is still in prepare phase
     buffered_proposals: Vec<(EntryId, T)>,
+    // Proposals of this node currently in transit
+    pending_proposals: HashMap<SlotId, (EntryId, T)>,
     outgoing: Vec<PaxosMessage<T>>,
     leader_state: LeaderState<T>,
     cached_promise_message: Option<Promise<T>>,
@@ -104,6 +108,7 @@ where
             peers,
             state: (Role::Follower, Phase::None),
             buffered_proposals: vec![],
+            pending_proposals: HashMap::new(),
             entry_id: (pid, 0),
             outgoing,
             leader_state: LeaderState::<T>::with(leader, num_nodes),
@@ -150,70 +155,31 @@ where
     /// Append an entry to the replicated log.
     pub(crate) fn append(&mut self, entry: T) {
         let entry_id = self.next_data_id();
-        self.try_append(entry_id, entry);
+        self.try_append((entry_id, entry));
     }
 
-    pub(crate) fn try_append(&mut self, entry_id: EntryId, entry: T) {
+    pub(crate) fn try_append(&mut self, entry: (EntryId, T)) {
         match self.state {
-            (Role::Leader, Phase::Accept) => match self.mode {
-                Mode::OmniPaxos => self.op_accept_entry_leader((entry_id, entry)),
-                Mode::FastPaxos => self.fp_fast_propose((entry_id, entry)),
-            },
+            (Role::Leader, Phase::Accept) => self.op_accept_entry_leader(entry),
             (Role::Follower, Phase::Accept) => match self.mode {
-                Mode::OmniPaxos => self.op_forward_proposal((entry_id, entry)),
-                Mode::FastPaxos => self.fp_fast_propose((entry_id, entry)),
+                Mode::OmniPaxos => self.op_forward_proposal(entry),
+                Mode::FastPaxos => self.fp_fast_propose(entry),
             },
-            _ => self.buffered_proposals.push((entry_id, entry)),
+            _ => self.buffered_proposals.push(entry),
         }
     }
 
     pub(crate) fn handle_buffered_proposals(&mut self) {
         if !self.buffered_proposals.is_empty() {
             let entries = std::mem::take(&mut self.buffered_proposals);
-            for (entry_id, entry) in entries {
-                self.try_append(entry_id, entry);
+            for entry in entries {
+                self.try_append(entry);
             }
         }
     }
 
     fn get_current_leader(&self) -> NodeId {
         self.internal_storage.get_promise().pid
-    }
-
-    fn fp_fast_propose(&mut self, entry: (EntryId, T)) {
-        let accept_status = AcceptStatus::FpFastAccepted;
-        // Add to storage
-        let slot_idx = self.internal_storage.add_entry(LogEntry::Undecided(
-            entry.0,
-            entry.1.clone(),
-            accept_status,
-        ));
-
-        // Send fast accept to all peers
-        let acc = Accept {
-            n: self.internal_storage.get_promise(),
-            seq_num: SequenceNumber::default(), // not needed for fast path
-            entry: entry.clone(),
-            slot_idx,
-            accept_status,
-        };
-        self.send_to_all_peers(PaxosMsg::Accept(acc));
-
-        // Send own accepted to leader or handle if I am leader
-        let accepted = Accepted {
-            n: self.internal_storage.get_promise(),
-            slot_idx,
-            entry,
-            accept_status,
-        };
-        match self.state.0 {
-            Role::Follower => {
-                self.send_msg_to(self.get_current_leader(), PaxosMsg::Accepted(accepted));
-            }
-            Role::Leader => {
-                self.handle_accepted(accepted, self.pid);
-            }
-        }
     }
 
     /// Handles re-establishing a connection to a previously disconnected peer.
@@ -233,7 +199,7 @@ where
     pub(crate) fn op_forward_proposal(&mut self, entry: (EntryId, T)) {
         let leader = self.get_current_leader();
         if leader > 0 && self.pid != leader {
-            let pf = PaxosMsg::ProposalForward(entry.0, entry.1.clone());
+            let pf = PaxosMsg::ProposalForward(entry.clone());
             self.send_msg_to(leader, pf);
         } else {
             self.buffered_proposals.push(entry);
@@ -278,7 +244,7 @@ where
             PaxosMsg::AcceptSync(acc_sync) => self.handle_acceptsync(acc_sync, m.from),
 
             // Accept Phase
-            PaxosMsg::ProposalForward(entry_id, entry) => self.try_append(entry_id, entry),
+            PaxosMsg::ProposalForward(entry) => self.try_append(entry),
             PaxosMsg::Accept(acc) => match acc.accept_status {
                 AcceptStatus::FpFastAccepted => self.handle_fast_accept(acc),
                 AcceptStatus::OpAccepted | AcceptStatus::FpSlowAccepted => {

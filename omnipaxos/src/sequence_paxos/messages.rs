@@ -108,7 +108,7 @@ where
     /// The sequence number of this message in the leader-to-follower accept sequence
     pub seq_num: SequenceNumber,
     /// Entry to be decided.
-    pub entry: T,
+    pub entry: (EntryId, T),
     /// The index to place the decided entry.
     pub slot_idx: SlotId,
 }
@@ -138,7 +138,7 @@ where
     AcceptSync(AcceptSync<T>),
     Accept(Accept<T>),
     Accepted(Accepted<T>),
-    ProposalForward(EntryId, T),
+    ProposalForward((EntryId, T)),
     NotAccepted(NotAccepted),
     Decide(Decide<T>),
 }

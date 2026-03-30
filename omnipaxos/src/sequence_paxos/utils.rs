@@ -51,7 +51,7 @@ pub(crate) enum LeaderAction<T> {
     /// The slot has transitioned to a Slow Path; the leader must re-propose.
     ProcessSlowPath(SlotId, EntryId, T),
     /// One or more slots have been finalized. Contains new decisions and new decided_idx
-    Decided(Vec<(SlotId, T)>, SlotId),
+    Decided(Vec<(SlotId, (EntryId, T))>, SlotId),
 }
 
 #[derive(Debug, Clone)]
@@ -303,10 +303,9 @@ where
                 {
                     // Clean up all state related to this slot and retrieve entry
                     let val = self.entries.remove(entry_id).expect("Entry must exist");
+                    newly_decided.push((current_idx, (*entry_id, val)));
                     self.accept_meta.remove(&current_idx);
                     self.slot_results.remove(&current_idx);
-
-                    newly_decided.push((current_idx, val));
                     current_idx += 1;
                 }
                 LeaderAction::Decided(newly_decided, current_idx)
