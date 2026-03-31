@@ -72,6 +72,19 @@ def analyze_follower_metrics(df, features, targets, output_folder):
         plt.savefig(output_path / f"importance_{target}.png")
         plt.close()
 
+        # --- Actual vs Predicted Plot ---
+        plt.figure(figsize=(8, 8))
+        plt.scatter(y_test, test_preds, alpha=0.3, color="teal")
+        # Diagonal line representing "Perfect Prediction"
+        plt.plot([0, 1], [0, 1], color="red", linestyle="--", label="Perfect Fit")
+        plt.title(f"Actual vs. Predicted: {target}")
+        plt.xlabel("Actual")
+        plt.ylabel("Predicted")
+        plt.legend()
+        plt.grid(alpha=0.3)
+        plt.savefig(output_path / f"actual_vs_pred_{target}.png")
+        plt.close()
+
         # --- Residual Analysis Plots ---
         residuals = y_test - test_preds
         num_features = len(features)
@@ -114,23 +127,28 @@ if __name__ == "__main__":
     df["other_nodes_proposals_per_sec"] = (
         df["leader_proposals_per_sec"] + df["other_followers_proposals_per_sec"]
     )
+    df["in-flight_proposals"] = (
+        df["other_nodes_proposals_per_sec"] * df["latency_to_fast_fq"] / 1000
+    )
+
     features = [
         # "latency_to_leader",
         # "latency_to_majority_cq",
-        "latency_to_fast_fq",
+        # "latency_to_fast_fq",
         # "latency_to_all_max",
         # "own_proposals_per_sec",
         # "leader_proposals_per_sec",
         # "other_followers_proposals_per_sec",
         # "max_follower_proposals_per_sec",
-        "other_nodes_proposals_per_sec",
+        # "other_nodes_proposals_per_sec",
         # "number_of_nodes",
+        "in-flight_proposals",
     ]
     targets = [
         "successful_rate",
-        "collision_rate",
-        "leader_overwrite_rate",
-        "follower_overwrite_rate",
+        # "collision_rate",
+        # "leader_overwrite_rate",
+        # "follower_overwrite_rate",
     ]
-    result_dir = "./results/features_two/"
+    result_dir = "./results/features_in-flight-proposals/"
     analyze_follower_metrics(df, features, targets, result_dir)
