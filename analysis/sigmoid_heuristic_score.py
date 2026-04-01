@@ -25,13 +25,24 @@ df_val, df_test = train_test_split(df_temp, test_size=0.5, random_state=44)
 
 
 # Model fit
-def sigmoid(x):
-    return 1 / (1 + np.exp(4 / 3 * (x - np.log(0.5))))
+def sigmoid(x, k, x0):
+    return 1 / (1 + np.exp(k * (x - np.log(x0))))
 
+
+popt, _ = curve_fit(
+    sigmoid,
+    df_train["log_in-flight_proposals"],
+    df_train["successful_rate"],
+    maxfev=5000,
+)
+
+print("--- Sigmoid Model Parameters ---")
+print(f"(k): {popt[0]:.5f}")
+print(f"(x0): {popt[1]:.5f}")
 
 # Eval
 df_test = df_test.copy()
-df_test["pred"] = sigmoid(df_test["log_in-flight_proposals"])
+df_test["pred"] = sigmoid(df_test["log_in-flight_proposals"], *popt)
 rmse = np.sqrt(mean_squared_error(df_test["successful_rate"], df_test["pred"]))
 r2 = r2_score(df_test["successful_rate"], df_test["pred"])
 print("\n--- Performance ---")
@@ -66,7 +77,7 @@ ax3.scatter(
 x_range = np.linspace(
     df["log_in-flight_proposals"].min(), df["log_in-flight_proposals"].max(), 500
 )
-y_range = sigmoid(x_range)
+y_range = sigmoid(x_range, *popt)
 ax3.plot(np.exp(x_range), y_range, color="red", linewidth=2, label="Model")
 ax3.set_title("Model Fit: Log Contention vs. Success Rate")
 ax3.set_xscale("log")
