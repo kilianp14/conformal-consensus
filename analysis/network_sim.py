@@ -184,15 +184,16 @@ def run_simulation(nodes_count, base_latency, broadcasts_per_sec, leader_pct, si
             for id, rate in proposal_rates.items()
             if id != leader_id and id != follower.id
         ]
-        all_lats = sorted([net.latencies[follower.id][tid] for tid in node_ids])
+        all_lats = sorted([net.latencies[follower.id][tid] / 1000 for tid in node_ids])
         results.append(
             [
                 nodes_count,
-                round(net.latencies[follower.id][leader_id], 2),
-                round(all_lats[majority_quorum - 1], 2),
-                round(all_lats[fast_quorum - 1], 2),
-                round(all_lats[-1], 2),
-                round(proposal_rates[follower.id], 2),
+                follower_id,
+                round(net.latencies[follower_id][leader_id] / 1000, 4),
+                round(all_lats[majority_quorum - 1], 4),
+                round(all_lats[fast_quorum - 1], 4),
+                round(all_lats[-1], 4),
+                round(proposal_rates[follower_id], 2),
                 round(proposal_rates[leader_id], 2),
                 round(sum(other_follower_rates), 2),
                 round(max(other_follower_rates), 2),
@@ -200,6 +201,7 @@ def run_simulation(nodes_count, base_latency, broadcasts_per_sec, leader_pct, si
                 round(stats["coll"] / stats["prop"], 4),
                 round(stats["lead"] / stats["prop"], 4),
                 round(stats["other"] / stats["prop"], 4),
+                proposal_rates,
             ]
         )
     return results
@@ -218,6 +220,7 @@ def log_sample(low, high, intensity, invert=False):
 def batch_explorer(csv_filename, num_samples):
     headers = [
         "number_of_nodes",
+        "node_id",
         "latency_to_leader",
         "latency_to_majority_cq",
         "latency_to_fast_fq",
@@ -230,6 +233,7 @@ def batch_explorer(csv_filename, num_samples):
         "collision_rate",
         "leader_overwrite_rate",
         "follower_overwrite_rate",
+        "proposal_rates",
     ]
 
     # Initialize CSV if it doesn't exist
@@ -243,7 +247,7 @@ def batch_explorer(csv_filename, num_samples):
 
         n_nodes = random.randint(4, 8)
         bps = log_sample(5, 50000, proposal_intensity)
-        sim_time = log_sample(1000, 100000, proposal_intensity, invert=True)
+        sim_time = log_sample(2000, 200000, proposal_intensity, invert=True)
         base_lat = log_sample(0.2, 200, lat_intensity)
         leader_p = random.uniform(0.0, 1.0)
 
@@ -256,7 +260,7 @@ def batch_explorer(csv_filename, num_samples):
 
 if __name__ == "__main__":
     NUM_PARAM_SETS = 10000  # Number of random parameter sets to try
-    CSV_FILENAME = "follower_metrics3.csv"
+    CSV_FILENAME = "data/follower_metrics3.csv"
 
     batch_explorer(CSV_FILENAME, NUM_PARAM_SETS)
     print(f"\nSearch complete. Results appended to {CSV_FILENAME}")

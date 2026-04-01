@@ -16,8 +16,7 @@ def analyze_follower_metrics(df, features, targets, output_folder):
     for target in targets:
         print(f"\n{'=' * 20} Training for: {target} {'=' * 20}")
 
-        # Standardize target (assuming input is percentage 0-100)
-        y = df[target] / 100.0
+        y = df[target]
 
         # Split: 70% Train, 15% Val, 15% Test
         X_train, X_temp, y_train, y_temp = train_test_split(
@@ -123,12 +122,12 @@ def analyze_follower_metrics(df, features, targets, output_folder):
 
 
 if __name__ == "__main__":
-    df = pd.read_csv("./data/follower_metrics2.csv")
+    df = pd.read_csv("./data/follower_metrics3.csv")
     df["other_nodes_proposals_per_sec"] = (
         df["leader_proposals_per_sec"] + df["other_followers_proposals_per_sec"]
     )
     df["in-flight_proposals"] = (
-        df["other_nodes_proposals_per_sec"] * df["latency_to_fast_fq"] / 1000
+        df["other_nodes_proposals_per_sec"] * df["latency_to_fast_fq"]
     )
 
     features = [
