@@ -2,12 +2,16 @@ use crate::{
     errors::{valid_config, ConfigError},
     leader_election::BallotLeaderElection,
     messages::Message,
-    predictor::{ModeSetter, RandomModeSetter},
     sequence_paxos::SequencePaxos,
     utils::{
         defaults::{BUFFER_SIZE, ELECTION_TIMEOUT, RESEND_MESSAGE_TIMEOUT},
-        Ballot, Entry, LogEntry, LogicalClock, NodeId, Phase,
+        Ballot, Entry, EntryId, LogEntry, LogicalClock, Mode, NodeId, Phase,
     },
+};
+#[cfg(feature = "adaptive")]
+use crate::{
+    predictor::{ConformalModePredictor, Features},
+    utils::defaults::MODE_CHANGE_TIMEOUT,
 };
 #[cfg(any(feature = "toml_config", feature = "serde"))]
 use serde::Deserialize;
@@ -62,13 +66,17 @@ impl OmniPaxosConfig {
         self.validate()?;
         // Use stored ballot as initial BLE leader
         Ok(OmniPaxos {
-            ble: BallotLeaderElection::with(self.clone().into()),
             election_clock: LogicalClock::with(self.server_config.election_tick_timeout),
             resend_message_clock: LogicalClock::with(
                 self.server_config.resend_message_tick_timeout,
             ),
-            mode_setter: Box::new(RandomModeSetter {}),
-            seq_paxos: SequencePaxos::with(self.into()),
+            #[cfg(feature = "adaptive")]
+            mode_change_clock: LogicalClock::with(self.server_config.mode_change_tick_timeout),
+            entry_id: (self.server_config.pid, 0),
+            ble: BallotLeaderElection::with(self.clone().into()),
+            seq_paxos: SequencePaxos::with(self.clone().into()),
+            #[cfg(feature = "adaptive")]
+            conformal_mode_predictor: ConformalModePredictor::with(self.into()),
         })
     }
 }
@@ -123,10 +131,15 @@ impl ClusterConfig {
 pub struct ServerConfig {
     /// The unique identifier of this node. Must not be 0.
     pub pid: NodeId,
+    /// Operating mode of sequence_paxos (OmniPaxos or FastPaxos)
+    pub mode: Mode,
     /// The number of calls to `tick()` before leader election is updated. If this is set to 5 and `tick()` is called every 10ms, then the election timeout will be 50ms.
     pub election_tick_timeout: u64,
     /// The number of calls to `tick()` before a message is considered dropped and thus resent. Must not be 0.
     pub resend_message_tick_timeout: u64,
+    /// The number of calls to `tick()` before sequence_paxos operating mode is updated
+    #[cfg(feature = "adaptive")]
+    pub mode_change_tick_timeout: u64,
     /// The buffer size for outgoing messages.
     pub buffer_size: usize,
     /// Custom priority for this node to be elected as the leader.
@@ -161,8 +174,11 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             pid: 0,
+            mode: Mode::OmniPaxos,
             election_tick_timeout: ELECTION_TIMEOUT,
             resend_message_tick_timeout: RESEND_MESSAGE_TIMEOUT,
+            #[cfg(feature = "adaptive")]
+            mode_change_tick_timeout: MODE_CHANGE_TIMEOUT,
             buffer_size: BUFFER_SIZE,
             leader_priority: 0,
             #[cfg(feature = "logging")]
@@ -181,9 +197,14 @@ where
 {
     seq_paxos: SequencePaxos<T>,
     ble: BallotLeaderElection,
-    mode_setter: Box<dyn ModeSetter + Send + 'static>,
+    #[cfg(feature = "adaptive")]
+    conformal_mode_predictor: ConformalModePredictor,
+    // Used to differ between concurrent proposals of the same entry
+    entry_id: EntryId,
     election_clock: LogicalClock,
     resend_message_clock: LogicalClock,
+    #[cfg(feature = "adaptive")]
+    mode_change_clock: LogicalClock,
 }
 
 impl<T> OmniPaxos<T>
@@ -258,8 +279,8 @@ where
 
     /// Append an entry to the replicated log.
     pub fn append(&mut self, entry: T) {
-        self.seq_paxos.mode = self.mode_setter.get_new_mode();
-        self.seq_paxos.append(entry)
+        self.entry_id.1 += 1;
+        self.seq_paxos.append((self.entry_id, entry))
     }
 
     /// Handles re-establishing a connection to a previously disconnected peer.
@@ -269,7 +290,7 @@ where
     }
 
     /// Increments the internal logical clock. This drives the processes for leader changes, resending dropped messages, and flushing batched log entries.
-    /// Each of these is triggered every `election_tick_timeout`, `resend_message_tick_timeout`, and `flush_batch_tick_timeout` number of calls to this function
+    /// Each of these is triggered every `election_tick_timeout`, `resend_message_tick_timeout`, and `mode_change_tick_timeout` number of calls to this function
     /// (See how to configure these timeouts in `ServerConfig`).
     pub fn tick(&mut self) {
         if self.election_clock.tick_and_check_timeout() {
@@ -277,6 +298,21 @@ where
         }
         if self.resend_message_clock.tick_and_check_timeout() {
             self.seq_paxos.resend_message_timeout();
+        }
+        #[cfg(feature = "adaptive")]
+        {
+            if self.mode_change_clock.tick_and_check_timeout() {
+                let fast_quorum_latency = self.ble.get_fast_quorum_latency();
+                if let Some(fql) = fast_quorum_latency {
+                    let features = Features {
+                        fast_quorum_latency_in_s: fql,
+                        // TODO:
+                        other_nodes_proposals_per_s: 0.0,
+                    };
+                    self.seq_paxos
+                        .set_operating_mode(self.conformal_mode_predictor.get_new_mode(features));
+                }
+            }
         }
     }
 

@@ -253,13 +253,13 @@ impl BallotLeaderElection {
                     .unwrap()
                     .as_micros() as u64;
                 let rtt = (now - rep.sent_at) as f64;
-                let one_way_millis = rtt / 2000.0;
+                let one_way_secs = rtt / 2000000.0;
 
                 if let Some(history) = self.latency_histories.get_mut(&from) {
                     if history.len() >= self.latency_window_size {
                         history.pop_front();
                     }
-                    history.push_back(one_way_millis);
+                    history.push_back(one_way_secs);
                 }
             }
             self.heartbeat_replies.push(rep);
@@ -270,9 +270,24 @@ impl BallotLeaderElection {
         self.current_ballot
     }
 
-    /// Returns the rolling average of one-way latency for a specific node in millis
+    /// Returns the rolling average of one-way-latencies needed to reach a fast_quorum
     #[cfg(feature = "adaptive")]
-    pub fn get_node_latency_avg(&self, node_id: NodeId) -> Option<f64> {
+    pub fn get_fast_quorum_latency(&self) -> Option<f64> {
+        let mut latencies: Vec<f64> = self
+            .peers
+            .iter()
+            .filter_map(|&id| self.get_node_latency_avg(id))
+            .collect();
+        latencies.push(0.0); // Own latency
+        if latencies.len() < self.quorum.fast_quorum {
+            return None;
+        }
+        latencies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        Some(latencies[self.quorum.fast_quorum - 1])
+    }
+
+    #[cfg(feature = "adaptive")]
+    fn get_node_latency_avg(&self, node_id: NodeId) -> Option<f64> {
         self.latency_histories.get(&node_id).and_then(|history| {
             if history.is_empty() {
                 None

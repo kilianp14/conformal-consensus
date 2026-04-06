@@ -1,131 +1,152 @@
-use crate::utils::Mode;
-use std::{
-    collections::{HashMap, HashSet},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+#[cfg(feature = "logging")]
+use crate::utils::create_logger;
+use crate::{
+    utils::{Mode, NodeId},
+    OmniPaxosConfig,
 };
+#[cfg(feature = "logging")]
+use slog::{error, warn, Logger};
 
-/// To change mode dynamically during runtime
-pub trait ModeSetter: Send {
-    /// Returns the new mode to be set
-    fn get_new_mode(&mut self) -> Mode;
+/// Configuration for `SequencePaxos`.
+/// # Fields
+/// * `pid`: The unique identifier of this node. Must not be 0.
+/// * `peers`: The peers of this node i.e. the `pid`s of the other servers in the configuration.
+/// * `buffer_size`: The buffer size for outgoing messages.
+/// * `mode`: Operating mode of sequence_paxos (OmniPaxos or FastPaxos)
+/// * `logger_file_path`: The path where the default logger logs events.
+#[derive(Clone, Debug)]
+pub(crate) struct ConformalModePredictorConfig {
+    pid: NodeId,
+    #[cfg(feature = "logging")]
+    logger_file_path: Option<String>,
+    #[cfg(feature = "logging")]
+    custom_logger: Option<Logger>,
 }
 
-/// Always use conservative path
-pub struct AlwaysOmniPaxosMode {}
-
-impl ModeSetter for AlwaysOmniPaxosMode {
-    fn get_new_mode(&mut self) -> Mode {
-        Mode::OmniPaxos
-    }
-}
-
-/// Always use fast path
-pub struct AlwaysFastPaxosMode {}
-
-impl ModeSetter for AlwaysFastPaxosMode {
-    fn get_new_mode(&mut self) -> Mode {
-        Mode::FastPaxos
-    }
-}
-
-/// For testing purposes (safety when nodes have different modes)
-pub struct RandomModeSetter {}
-
-impl ModeSetter for RandomModeSetter {
-    fn get_new_mode(&mut self) -> Mode {
-        // Pseudo-random using nano-seconds
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .subsec_nanos();
-
-        if nanos.is_multiple_of(2) {
-            Mode::OmniPaxos
-        } else {
-            Mode::FastPaxos
+impl From<OmniPaxosConfig> for ConformalModePredictorConfig {
+    fn from(config: OmniPaxosConfig) -> Self {
+        ConformalModePredictorConfig {
+            pid: config.server_config.pid,
+            #[cfg(feature = "logging")]
+            logger_file_path: config.server_config.logger_file_path,
+            #[cfg(feature = "logging")]
+            custom_logger: config.server_config.custom_logger,
         }
     }
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct Features {
-    leader_uptime: Duration,
-    // For later
+    pub(crate) fast_quorum_latency_in_s: f64,
+    pub(crate) other_nodes_proposals_per_s: f64,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(crate) enum Label {
-    Collision,
-    NoCollision,
+    Success,
+    NoSuccess,
 }
 
-pub(crate) struct ConformalModeSetter {
-    model: fn(Features) -> HashMap<Label, f64>, // Has to have softmax
-    lambda_hat: f64,                            // Bounded between 0 and 1
+fn model(x: Features) -> Vec<(Label, f64)> {
+    let successful_pred = 1.0
+        / (1.0
+            + (2.0 * x.fast_quorum_latency_in_s * x.other_nodes_proposals_per_s).powf(4.0 / 3.0));
+    vec![
+        (Label::Success, successful_pred),
+        (Label::NoSuccess, 1.0 - successful_pred),
+    ]
 }
 
-impl ConformalModeSetter {
-    pub fn new(
-        model: fn(Features) -> HashMap<Label, f64>,
-        calibration_set: Vec<(Features, Label)>,
-        loss_function: fn(HashSet<Label>, Label) -> f64,
-        alpha: f64,
-    ) -> Self {
+pub(crate) struct ConformalModePredictor {
+    model: fn(Features) -> Vec<(Label, f64)>, // Softmax/ Sigmoid
+    lambda_hat: Option<f64>,                  // Bounded between 0 and 1
+    #[cfg(feature = "logging")]
+    logger: Logger,
+}
+
+impl ConformalModePredictor {
+    pub fn with(config: ConformalModePredictorConfig) -> Self {
+        Self {
+            model,
+            lambda_hat: None,
+            #[cfg(feature = "logging")]
+            logger: {
+                if let Some(logger) = config.custom_logger {
+                    logger
+                } else {
+                    let s = config
+                        .logger_file_path
+                        .unwrap_or_else(|| format!("logs/paxos_{}.log", config.pid));
+                    create_logger(s.as_str())
+                }
+            },
+        }
+    }
+
+    pub fn calibrate(&mut self, calibration_set: &[(Features, Label)], alpha: f64) {
         let n_calibration = calibration_set.len() as f64;
         if n_calibration <= 0.0 {
-            panic!("Calibration data empty");
+            #[cfg(feature = "logging")]
+            warn!(
+                self.logger,
+                "Calibration data empty. No calibration performed"
+            );
+            return;
         }
         let lambda_threshold = |lambda: f64| {
-            empirical_risk(model, &calibration_set, loss_function, lambda)
+            self.empirical_risk(calibration_set, lambda)
                 - ((n_calibration + 1.0) / n_calibration * alpha - 1.0 / n_calibration)
         };
-        let lambda_hat = brentq(lambda_threshold, 0.0, 1.0, 1e-12);
-        Self { model, lambda_hat }
+        self.lambda_hat = brentq(lambda_threshold, 0.0, 1.0, 1e-12);
+        if self.lambda_hat == None {
+            #[cfg(feature = "logging")]
+            error!(self.logger, "No lambda found. Calibration unsuccessful");
+        }
     }
 
     pub fn get_new_mode(&self, features: Features) -> Mode {
-        let labels = get_prediction_set_with_lambda(self.model, features, self.lambda_hat);
-        if labels.contains(&Label::NoCollision) {
-            Mode::FastPaxos
-        } else {
-            Mode::OmniPaxos
+        match self.lambda_hat {
+            Some(l_hat) => {
+                let labels = self.get_prediction_set_with_lambda(features, l_hat);
+                if labels.contains(&Label::NoSuccess) {
+                    Mode::OmniPaxos
+                } else {
+                    Mode::FastPaxos
+                }
+            }
+            None => Mode::FastPaxos, // Calibration phase -> always try fast path
         }
     }
-}
-
-fn empirical_risk(
-    model: fn(Features) -> HashMap<Label, f64>,
-    calibration_set: &[(Features, Label)],
-    loss_function: fn(HashSet<Label>, Label) -> f64,
-    lambda: f64,
-) -> f64 {
-    let mut total_loss = 0.0;
-    for (features, true_label) in calibration_set {
-        let prediction_set = get_prediction_set_with_lambda(model, features.clone(), lambda);
-        let loss = loss_function(prediction_set, true_label.clone());
-        total_loss += loss;
+    fn empirical_risk(&self, calibration_set: &[(Features, Label)], lambda: f64) -> f64 {
+        let mut total_loss = 0.0;
+        for (features, true_label) in calibration_set {
+            let prediction_set = self.get_prediction_set_with_lambda(features.clone(), lambda);
+            // Bad case is when fast path does not succeed but this failure is not predicted
+            total_loss +=
+                if true_label == &Label::NoSuccess && !prediction_set.contains(&Label::NoSuccess) {
+                    1.0
+                } else {
+                    0.0
+                }
+        }
+        total_loss / calibration_set.len() as f64
     }
-    total_loss / calibration_set.len() as f64
+
+    fn get_prediction_set_with_lambda(&self, features: Features, lambda: f64) -> Vec<Label> {
+        (self.model)(features)
+            .into_iter()
+            .filter_map(|(label, score)| {
+                if score >= 1.0 - lambda {
+                    Some(label)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
 }
 
-fn get_prediction_set_with_lambda(
-    model: fn(Features) -> HashMap<Label, f64>,
-    features: Features,
-    lambda: f64,
-) -> HashSet<Label> {
-    (model)(features)
-        .into_iter()
-        .filter_map(|(label, score)| {
-            if score >= 1.0 - lambda {
-                Some(label)
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
-fn brentq<F>(f: F, mut a: f64, mut b: f64, tol: f64) -> f64
+fn brentq<F>(f: F, mut a: f64, mut b: f64, tol: f64) -> Option<f64>
 where
     F: Fn(f64) -> f64,
 {
@@ -133,15 +154,15 @@ where
     let mut fb = f(b);
 
     if fa == 0.0 {
-        return a;
+        return Some(a);
     }
     if fb == 0.0 {
-        return b;
+        return Some(b);
     }
 
     // Root must be bracketed
     if fa * fb > 0.0 {
-        panic!("Root is not bracketed: f(a) and f(b) must have opposite signs.");
+        return None;
     }
 
     // Ensure |fa| >= |fb|
@@ -172,7 +193,7 @@ where
 
         // Convergence check
         if fb == 0.0 || m.abs() <= tol_act {
-            return b;
+            return Some(b);
         }
 
         if e.abs() >= tol_act && fa.abs() > fb.abs() {
@@ -239,6 +260,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use core::panic;
+
     use super::*;
 
     // Helper for floating point comparison
@@ -253,39 +276,47 @@ mod tests {
 
     #[test]
     fn test_linear_function() {
+        // x - 1 = 0 => root is 1.0
         let f = |x: f64| x - 1.0;
-        let root = brentq(f, 0.0, 2.0, 1e-7);
-        assert_nearly_equal(root, 1.0, 1e-7);
+        match brentq(f, 0.0, 2.0, 1e-12) {
+            Some(root) => assert_nearly_equal(root, 1.0, 1e-12),
+            None => panic!("No root determined"),
+        }
     }
 
     #[test]
     fn test_quadratic_function() {
         // x^2 - 2 = 0 => root is sqrt(2)
         let f = |x: f64| x * x - 2.0;
-        let root = brentq(f, 0.0, 2.0, 1e-12);
-        assert_nearly_equal(root, 2.0f64.sqrt(), 1e-12);
+        match brentq(f, 0.0, 2.0, 1e-12) {
+            Some(root) => assert_nearly_equal(root, 2.0f64.sqrt(), 1e-12),
+            None => panic!("No root determined"),
+        }
     }
 
     #[test]
     fn test_transcendental_function() {
         // sin(x) = 0 around pi
         let f = |x: f64| x.sin();
-        let root = brentq(f, 3.0, 4.0, 1e-12);
-        assert_nearly_equal(root, std::f64::consts::PI, 1e-12);
+        match brentq(f, 3.0, 4.0, 1e-12) {
+            Some(root) => assert_nearly_equal(root, std::f64::consts::PI, 1e-12),
+            None => panic!("No root determined"),
+        }
     }
 
     #[test]
-    #[should_panic(expected = "Root is not bracketed")]
-    fn test_invalid_bracket_panics() {
+    fn test_invalid_bracket() {
         let f = |x: f64| x * x + 1.0; // Never crosses zero
-        brentq(f, -1.0, 1.0, 1e-12);
+        assert_eq!(None, brentq(f, -1.0, 1.0, 1e-12));
     }
 
     #[test]
     fn test_root_at_boundary() {
         let f = |x: f64| x - 5.0;
         // The root is exactly at the upper bound 'b'
-        let root = brentq(f, 0.0, 5.0, 1e-12);
-        assert_nearly_equal(root, 5.0, 1e-12);
+        match brentq(f, 0.0, 5.0, 1e-12) {
+            Some(root) => assert_nearly_equal(root, 5.0, 1e-12),
+            None => panic!("No root determined"),
+        }
     }
 }

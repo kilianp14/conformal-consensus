@@ -183,11 +183,11 @@ where
             if let Some(own_proposed_entry_at_slot) = self.pending_proposals.remove(&dec.slot_idx) {
                 if own_proposed_entry_at_slot.0 != dec.entry.0 {
                     // The slot was taken by another entry; retry our proposal
-                    self.try_append(own_proposed_entry_at_slot);
+                    self.append(own_proposed_entry_at_slot);
                 }
             }
             self.internal_storage
-                .insert_at_index(dec.slot_idx, LogEntry::Decided(dec.entry.1));
+                .insert_at_index(dec.slot_idx, LogEntry::Decided(dec.entry.0, dec.entry.1));
             if dec.slot_idx >= self.internal_storage.get_decided_idx() {
                 self.internal_storage.set_decided_idx(dec.slot_idx + 1);
             }

@@ -210,7 +210,7 @@ where
             let mut resolved_entry = Self::find_correct_log_sync_value_for_slot(entries_at_slot);
 
             match &mut resolved_entry {
-                LogEntry::Decided(_) => {
+                LogEntry::Decided(_, _) => {
                     current_decided_idx += 1;
                 }
                 LogEntry::Undecided(_, _, entry_status) => {
@@ -234,7 +234,7 @@ where
         // 1. If there is a decided entry, return it
         if let Some(pos) = values
             .iter()
-            .position(|e| matches!(e, LogEntry::Decided(_)))
+            .position(|e| matches!(e, LogEntry::Decided(_, _)))
         {
             return values.remove(pos);
         }

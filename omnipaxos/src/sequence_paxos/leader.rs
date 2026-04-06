@@ -214,13 +214,13 @@ where
                         self.send_msg_to(pid, PaxosMsg::Decide(d));
                     }
                     self.internal_storage
-                        .insert_at_index(slot_idx, LogEntry::Decided(entry.1));
+                        .insert_at_index(slot_idx, LogEntry::Decided(entry.0, entry.1));
                     if let Some(own_proposed_entry_at_slot) =
                         self.pending_proposals.remove(&slot_idx)
                     {
                         if own_proposed_entry_at_slot.0 != entry.0 {
                             // The slot was taken by another entry; retry our proposal
-                            self.try_append(own_proposed_entry_at_slot);
+                            self.append(own_proposed_entry_at_slot);
                         }
                     }
                 }

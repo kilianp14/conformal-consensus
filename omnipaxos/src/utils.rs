@@ -35,8 +35,8 @@ where
     T: Entry,
 {
     /// The entry is decided.
-    Decided(T),
-    /// The entry is NOT decided. Might be removed from log at later time. Empty slots possible
+    Decided(EntryId, T),
+    /// The entry is NOT decided. Might be removed from log at later time
     Undecided(EntryId, T, AcceptStatus),
     /// Slot is currently empty
     Empty,
@@ -45,7 +45,7 @@ where
 impl<T: PartialEq + Entry> PartialEq for LogEntry<T> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (LogEntry::Decided(v1), LogEntry::Decided(v2)) => v1 == v2,
+            (LogEntry::Decided(id1, _), LogEntry::Decided(id2, _)) => id1 == id2,
             (LogEntry::Empty, LogEntry::Empty) => true,
             (LogEntry::Undecided(id1, _, _), LogEntry::Undecided(id2, _, _)) => id1 == id2,
             _ => false,
@@ -58,8 +58,12 @@ pub(crate) mod defaults {
     pub(crate) const BLE_BUFFER_SIZE: usize = 100;
     #[cfg(feature = "adaptive")]
     pub(crate) const LATENCY_TRACKING_WINDOW_SIZE: usize = 10;
+    #[cfg(feature = "adaptive")]
+    pub(crate) const OTHER_PROPOSALS_TRACKING_WINDOW_SIZE: usize = 100;
     pub(crate) const ELECTION_TIMEOUT: u64 = 1;
     pub(crate) const RESEND_MESSAGE_TIMEOUT: u64 = 100;
+    #[cfg(feature = "adaptive")]
+    pub(crate) const MODE_CHANGE_TIMEOUT: u64 = 1;
 }
 
 /// Used for checking the ordering of message sequences in the accept phase
@@ -155,9 +159,9 @@ impl LogicalClock {
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct Quorum {
     /// Majority of nodes
-    majority_quorum: usize,
+    pub(crate) majority_quorum: usize,
     /// Number of nodes for successful fast round
-    fast_quorum: usize,
+    pub(crate) fast_quorum: usize,
 }
 
 impl Quorum {
