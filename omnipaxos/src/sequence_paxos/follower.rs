@@ -93,6 +93,11 @@ where
         self.send_to_all_peers(PaxosMsg::Accept(acc));
         self.pending_proposals.insert(slot_idx, entry.clone());
 
+        #[cfg(feature = "adaptive")]
+        {
+            self.total_fast_path_tries += 1;
+        }
+
         // Send own accepted to leader or handle if I am leader
         let accepted = Accepted {
             n: self.internal_storage.get_promise(),
@@ -207,6 +212,14 @@ where
                 debug!(self.logger, "Pid {}. Incoming Decide: {:?}", self.pid, dec);
             }
             if let Some(own_proposed_entry_at_slot) = self.pending_proposals.remove(&dec.slot_idx) {
+                #[cfg(feature = "adaptive")]
+                // Own proposed value was decided using fast path => Success
+                if own_proposed_entry_at_slot.0 == dec.entry.0
+                    && dec.accept_status == AcceptStatus::FpFastAccepted
+                {
+                    self.successful_fast_paths += 1
+                }
+
                 if own_proposed_entry_at_slot.0 != dec.entry.0 {
                     // The slot was taken by another entry; retry our proposal
                     self.append(own_proposed_entry_at_slot);

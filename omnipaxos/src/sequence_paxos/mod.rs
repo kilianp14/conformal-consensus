@@ -89,6 +89,10 @@ where
     // Timestamp when the incoming accept messages where last polled
     #[cfg(feature = "adaptive")]
     last_proposals_measurement: std::time::Instant,
+    #[cfg(feature = "adaptive")]
+    successful_fast_paths: u64,
+    #[cfg(feature = "adaptive")]
+    total_fast_path_tries: u64,
     #[cfg(feature = "logging")]
     logger: Logger,
 }
@@ -121,6 +125,10 @@ where
             other_proposals_count: 0,
             #[cfg(feature = "adaptive")]
             last_proposals_measurement: std::time::Instant::now(),
+            #[cfg(feature = "adaptive")]
+            successful_fast_paths: 0,
+            #[cfg(feature = "adaptive")]
+            total_fast_path_tries: 0,
             #[cfg(feature = "logging")]
             logger: {
                 if let Some(logger) = config.custom_logger {
@@ -239,6 +247,20 @@ where
         self.other_proposals_count = 0;
         self.last_proposals_measurement = std::time::Instant::now();
         current_throughput
+    }
+
+    /// Returns the successful fast paths compared to the total fast paths tried (if any)
+    /// Restarts the rate computation
+    #[cfg(feature = "adaptive")]
+    pub(crate) fn get_successful_fast_path_rate(&mut self) -> Option<f64> {
+        let fast_path_rate = if self.total_fast_path_tries == 0 {
+            None
+        } else {
+            Some(self.successful_fast_paths as f64 / self.total_fast_path_tries as f64)
+        };
+        self.total_fast_path_tries = 0;
+        self.successful_fast_paths = 0;
+        fast_path_rate
     }
 
     /// Handle an incoming message.
