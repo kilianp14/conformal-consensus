@@ -203,12 +203,13 @@ where
                 );
             }
             LeaderAction::Decided(new_decided_entries, new_decided_index) => {
-                for (slot_idx, entry) in new_decided_entries {
+                for (slot_idx, entry, accept_status) in new_decided_entries {
                     for pid in self.leader_state.get_promised_followers() {
                         let d = Decide {
                             n: self.leader_state.n_leader,
                             seq_num: self.leader_state.next_seq_num(pid),
                             entry: entry.clone(),
+                            accept_status,
                             slot_idx,
                         };
                         self.send_msg_to(pid, PaxosMsg::Decide(d));

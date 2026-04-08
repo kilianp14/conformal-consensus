@@ -83,6 +83,12 @@ where
     cached_promise_message: Option<Promise<T>>,
     // Keeps track of sequence of accepts from leader where AcceptSync = 1
     current_seq_num: SequenceNumber,
+    // Keeps track of number of accept messages since last measurement
+    #[cfg(feature = "adaptive")]
+    other_proposals_count: u64,
+    // Timestamp when the incoming accept messages where last polled
+    #[cfg(feature = "adaptive")]
+    last_proposals_measurement: std::time::Instant,
     #[cfg(feature = "logging")]
     logger: Logger,
 }
@@ -111,6 +117,10 @@ where
             leader_state: LeaderState::<T>::with(leader, num_nodes),
             cached_promise_message: None,
             current_seq_num: SequenceNumber::default(),
+            #[cfg(feature = "adaptive")]
+            other_proposals_count: 0,
+            #[cfg(feature = "adaptive")]
+            last_proposals_measurement: std::time::Instant::now(),
             #[cfg(feature = "logging")]
             logger: {
                 if let Some(logger) = config.custom_logger {
@@ -221,6 +231,16 @@ where
         }
     }
 
+    /// Returns the estimated number of Accept messages received per second.
+    #[cfg(feature = "adaptive")]
+    pub(crate) fn get_other_proposals_per_second(&mut self) -> f64 {
+        let elapsed = self.last_proposals_measurement.elapsed().as_secs_f64();
+        let current_throughput = self.other_proposals_count as f64 / elapsed;
+        self.other_proposals_count = 0;
+        self.last_proposals_measurement = std::time::Instant::now();
+        current_throughput
+    }
+
     /// Handle an incoming message.
     pub(crate) fn handle(&mut self, m: PaxosMessage<T>) {
         match m.msg {
@@ -237,10 +257,21 @@ where
             // Accept Phase
             PaxosMsg::ProposalForward(entry) => self.append(entry),
             PaxosMsg::Accept(acc) => match acc.accept_status {
-                AcceptStatus::FpFastAccepted => self.handle_fast_accept(acc),
-                AcceptStatus::OpAccepted | AcceptStatus::FpSlowAccepted => {
-                    self.handle_slow_accept(acc)
+                AcceptStatus::FpFastAccepted => {
+                    #[cfg(feature = "adaptive")]
+                    {
+                        self.other_proposals_count += 1;
+                    }
+                    self.handle_fast_accept(acc);
                 }
+                AcceptStatus::OpAccepted => {
+                    #[cfg(feature = "adaptive")]
+                    {
+                        self.other_proposals_count += 1;
+                    }
+                    self.handle_omnipaxos_accept(acc)
+                }
+                AcceptStatus::FpSlowAccepted => self.handle_slow_accept(acc),
             },
             PaxosMsg::Accepted(accepted) => self.handle_accepted(accepted, m.from),
             PaxosMsg::NotAccepted(not_acc) => self.handle_notaccepted(not_acc, m.from),

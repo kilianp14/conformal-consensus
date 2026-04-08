@@ -39,9 +39,11 @@ enum SlotResult {
     Pending,
     // A quorum has voted, but vote is not uniform
     SlowPath(EntryId),
-    // A quorum has voted uniformly using OmniPaxos accept
-    // or a fast quorum has voted uniformly
-    Decided(EntryId),
+    // A majority quorum has voted uniformly using OpAccepted
+    // a fast quorum has voted uniformly using FpFastAccepted
+    // or a majority has voted uniformly using FpSlowAccepted.
+    // Way of acceptance is in the accept status
+    Decided(EntryId, AcceptStatus),
 }
 
 #[derive(Debug, Clone)]
@@ -50,8 +52,8 @@ pub(crate) enum LeaderAction<T> {
     None,
     /// The slot has transitioned to a Slow Path; the leader must re-propose.
     ProcessSlowPath(SlotId, EntryId, T),
-    /// One or more slots have been finalized. Contains new decisions and new decided_idx
-    Decided(Vec<(SlotId, (EntryId, T))>, SlotId),
+    /// One or more slots have been finalized using an acceptance method. Contains new decisions and new decided_idx
+    Decided(Vec<(SlotId, (EntryId, T), AcceptStatus)>, SlotId),
 }
 
 #[derive(Debug, Clone)]
@@ -293,17 +295,18 @@ where
         // State Logic
         match slot_result {
             // Only trigger the "Decided" action if we just decided at the current decided_idx
-            SlotResult::Decided(eid) if slot_idx == decided_idx => {
+            SlotResult::Decided(_, _) if slot_idx == decided_idx => {
                 self.slot_results.insert(slot_idx, slot_result);
                 let mut newly_decided = Vec::new();
                 let mut current_idx = slot_idx;
 
                 // Drain contiguous decided slots
-                while let Some(SlotResult::Decided(entry_id)) = self.slot_results.get(&current_idx)
+                while let Some(SlotResult::Decided(entry_id, accept_status)) =
+                    self.slot_results.get(&current_idx)
                 {
                     // Clean up all state related to this slot and retrieve entry
                     let val = self.entries.remove(entry_id).expect("Entry must exist");
-                    newly_decided.push((current_idx, (*entry_id, val)));
+                    newly_decided.push((current_idx, (*entry_id, val), *accept_status));
                     self.accept_meta.remove(&current_idx);
                     self.slot_results.remove(&current_idx);
                     current_idx += 1;
@@ -356,17 +359,30 @@ where
             .map(|(id, counts)| (*id, *counts));
 
         // Check if we can make a decision
-        if let Some((entry_id, (op, _fast, slow, total_for_entry))) = winner {
-            if self.quorum.is_fast_quorum(total_for_entry)
-                || self.quorum.is_majority_quorum(op + slow)
-            {
-                return SlotResult::Decided(entry_id);
+        if let Some((entry_id, (op, fast, slow, total_for_entry))) = winner {
+            if self.quorum.is_majority_quorum(op) {
+                return SlotResult::Decided(entry_id, AcceptStatus::OpAccepted);
             }
-            // Collision
-            if total_for_entry != total_votes_in_slot {
-                return SlotResult::SlowPath(entry_id);
+            if self.quorum.is_fast_quorum(fast) {
+                return SlotResult::Decided(entry_id, AcceptStatus::FpFastAccepted);
             }
-            SlotResult::Pending
+            if self.quorum.is_majority_quorum(slow) {
+                return SlotResult::Decided(entry_id, AcceptStatus::FpSlowAccepted);
+            }
+
+            // Calculate if a fast path is still possible
+            let remaining_votes = self.quorum.total_nodes - total_votes_in_slot;
+            let max_possible_votes = total_for_entry + remaining_votes;
+
+            if self.quorum.is_fast_quorum(max_possible_votes) {
+                // It is still possible to reach a fast quorum if the
+                // remaining nodes vote for this entry_id.
+                SlotResult::Pending
+            } else {
+                // Even with all remaining votes, the winner cannot reach
+                // the fast quorum. Transition to slow path.
+                SlotResult::SlowPath(entry_id)
+            }
         } else {
             panic!("Votes but no winner should not be possible");
         }

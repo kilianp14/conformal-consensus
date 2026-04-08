@@ -21,6 +21,7 @@ pub mod messages;
 /// The user-facing OmniPaxos struct.
 mod omni_paxos;
 /// Conformal predictor for mode switching
+#[cfg(feature = "adaptive")]
 pub mod predictor;
 /// The core replication algorithm of OmniPaxos.
 pub mod sequence_paxos;

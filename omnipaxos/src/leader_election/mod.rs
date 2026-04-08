@@ -244,7 +244,7 @@ impl BallotLeaderElection {
         });
     }
 
-    fn handle_reply(&mut self, from: NodeId, rep: HeartbeatReply) {
+    fn handle_reply(&mut self, _from: NodeId, rep: HeartbeatReply) {
         if rep.round == self.hb_round {
             #[cfg(feature = "adaptive")]
             {
@@ -255,7 +255,7 @@ impl BallotLeaderElection {
                 let rtt = (now - rep.sent_at) as f64;
                 let one_way_secs = rtt / 2000000.0;
 
-                if let Some(history) = self.latency_histories.get_mut(&from) {
+                if let Some(history) = self.latency_histories.get_mut(&_from) {
                     if history.len() >= self.latency_window_size {
                         history.pop_front();
                     }

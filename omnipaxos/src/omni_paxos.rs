@@ -303,11 +303,11 @@ where
         {
             if self.mode_change_clock.tick_and_check_timeout() {
                 let fast_quorum_latency = self.ble.get_fast_quorum_latency();
+                let other_nodes_proposals = self.seq_paxos.get_other_proposals_per_second();
                 if let Some(fql) = fast_quorum_latency {
                     let features = Features {
                         fast_quorum_latency_in_s: fql,
-                        // TODO:
-                        other_nodes_proposals_per_s: 0.0,
+                        other_nodes_proposals_per_s: other_nodes_proposals,
                     };
                     self.seq_paxos
                         .set_operating_mode(self.conformal_mode_predictor.get_new_mode(features));

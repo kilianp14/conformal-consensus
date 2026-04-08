@@ -98,7 +98,7 @@ impl ConformalModePredictor {
                 - ((n_calibration + 1.0) / n_calibration * alpha - 1.0 / n_calibration)
         };
         self.lambda_hat = brentq(lambda_threshold, 0.0, 1.0, 1e-12);
-        if self.lambda_hat == None {
+        if self.lambda_hat.is_none() {
             #[cfg(feature = "logging")]
             error!(self.logger, "No lambda found. Calibration unsuccessful");
         }

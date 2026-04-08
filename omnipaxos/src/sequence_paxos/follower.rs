@@ -146,15 +146,41 @@ where
         if self.check_valid_ballot(acc.n)
             && self.state == (Role::Follower, Phase::Accept)
             && self.handle_sequence_num(acc.seq_num, acc.n.pid) == MessageStatus::Expected
-            // Fast Paxos Slow Accepts should always override, otherwise only override empty slots
-            && (acc.accept_status == AcceptStatus::FpSlowAccepted
-                || self.internal_storage.slot_is_empty(acc.slot_idx))
         {
             #[cfg(feature = "logging")]
             {
                 debug!(
                     self.logger,
                     "Pid {}. Incoming Slow Accept: {:?}", self.pid, acc
+                );
+            }
+            // Fast Paxos Slow Accepts should always override
+            self.internal_storage.insert_at_index(
+                acc.slot_idx,
+                LogEntry::Undecided(acc.entry.0, acc.entry.1.clone(), acc.accept_status),
+            );
+            let accepted = Accepted {
+                n: acc.n,
+                entry: acc.entry,
+                slot_idx: acc.slot_idx,
+                accept_status: acc.accept_status,
+            };
+            self.send_msg_to(acc.n.pid, PaxosMsg::Accepted(accepted));
+        }
+    }
+
+    pub(crate) fn handle_omnipaxos_accept(&mut self, acc: Accept<T>) {
+        if self.check_valid_ballot(acc.n)
+            && self.state == (Role::Follower, Phase::Accept)
+            && self.handle_sequence_num(acc.seq_num, acc.n.pid) == MessageStatus::Expected
+            // Can only override empty slots
+            && self.internal_storage.slot_is_empty(acc.slot_idx)
+        {
+            #[cfg(feature = "logging")]
+            {
+                debug!(
+                    self.logger,
+                    "Pid {}. Incoming Omnipaxos Accept: {:?}", self.pid, acc
                 );
             }
             self.internal_storage.insert_at_index(

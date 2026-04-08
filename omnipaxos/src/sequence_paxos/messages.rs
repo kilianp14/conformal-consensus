@@ -109,6 +109,8 @@ where
     pub seq_num: SequenceNumber,
     /// Entry to be decided.
     pub entry: (EntryId, T),
+    /// Way the entry was decided
+    pub accept_status: AcceptStatus,
     /// The index to place the decided entry.
     pub slot_idx: SlotId,
 }

@@ -56,14 +56,16 @@ impl<T: PartialEq + Entry> PartialEq for LogEntry<T> {
 pub(crate) mod defaults {
     pub(crate) const BUFFER_SIZE: usize = 100000;
     pub(crate) const BLE_BUFFER_SIZE: usize = 100;
-    #[cfg(feature = "adaptive")]
-    pub(crate) const LATENCY_TRACKING_WINDOW_SIZE: usize = 10;
-    #[cfg(feature = "adaptive")]
-    pub(crate) const OTHER_PROPOSALS_TRACKING_WINDOW_SIZE: usize = 100;
     pub(crate) const ELECTION_TIMEOUT: u64 = 1;
     pub(crate) const RESEND_MESSAGE_TIMEOUT: u64 = 100;
     #[cfg(feature = "adaptive")]
+    pub(crate) const LATENCY_TRACKING_WINDOW_SIZE: usize = 10;
+    #[cfg(feature = "adaptive")]
     pub(crate) const MODE_CHANGE_TIMEOUT: u64 = 1;
+    #[cfg(feature = "adaptive")]
+    pub(crate) const CALIBRATION_SET_SIZE: u64 = 10000;
+    #[cfg(feature = "adaptive")]
+    pub(crate) const SIGNIFICANCE_LEVEL: f64 = 0.1;
 }
 
 /// Used for checking the ordering of message sequences in the accept phase
@@ -158,6 +160,8 @@ impl LogicalClock {
 /// The type of quorum used by the OmniPaxos cluster.
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct Quorum {
+    /// Number of Nodes
+    pub(crate) total_nodes: usize,
     /// Majority of nodes
     pub(crate) majority_quorum: usize,
     /// Number of nodes for successful fast round
@@ -165,10 +169,11 @@ pub(crate) struct Quorum {
 }
 
 impl Quorum {
-    pub(crate) fn with(num_nodes: usize) -> Self {
+    pub(crate) fn with(total_nodes: usize) -> Self {
         Self {
-            majority_quorum: num_nodes / 2 + 1,
-            fast_quorum: (num_nodes * 3).div_ceil(4),
+            total_nodes,
+            majority_quorum: total_nodes / 2 + 1,
+            fast_quorum: (total_nodes * 3).div_ceil(4),
         }
     }
 
