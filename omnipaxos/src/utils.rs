@@ -10,10 +10,7 @@ use std::{fs::OpenOptions, sync::Mutex};
 pub type NodeId = u64;
 
 /// Type of the entries stored in the log.
-pub trait Entry: Clone + Debug {}
-
-/// Id for an entry
-pub type EntryId = (NodeId, u64);
+pub trait Entry: Clone + Debug + Eq {}
 
 /// The status of an Undecided entry in the log
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,9 +32,9 @@ where
     T: Entry,
 {
     /// The entry is decided.
-    Decided(EntryId, T),
+    Decided(T),
     /// The entry is NOT decided. Might be removed from log at later time
-    Undecided(EntryId, T, AcceptStatus),
+    Undecided(T, AcceptStatus),
     /// Slot is currently empty
     Empty,
 }
@@ -45,9 +42,9 @@ where
 impl<T: PartialEq + Entry> PartialEq for LogEntry<T> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (LogEntry::Decided(id1, _), LogEntry::Decided(id2, _)) => id1 == id2,
+            (LogEntry::Decided(e1), LogEntry::Decided(e2)) => e1 == e2,
             (LogEntry::Empty, LogEntry::Empty) => true,
-            (LogEntry::Undecided(id1, _, _), LogEntry::Undecided(id2, _, _)) => id1 == id2,
+            (LogEntry::Undecided(e1, _), LogEntry::Undecided(e2, _)) => e1 == e2,
             _ => false,
         }
     }
@@ -60,8 +57,6 @@ pub(crate) mod defaults {
     pub(crate) const RESEND_MESSAGE_TIMEOUT: u64 = 100;
     #[cfg(feature = "adaptive")]
     pub(crate) const LATENCY_TRACKING_WINDOW_SIZE: usize = 10;
-    #[cfg(feature = "adaptive")]
-    pub(crate) const PROPOSAL_TRACKING_WINDOW_SIZE: usize = 10;
     #[cfg(feature = "adaptive")]
     pub(crate) const CALIBRATION_SET_SIZE: u64 = 10000;
     #[cfg(feature = "adaptive")]

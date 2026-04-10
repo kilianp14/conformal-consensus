@@ -1,6 +1,6 @@
 use crate::{
     sequence_paxos::utils::{LogSync, SlotId},
-    utils::{AcceptStatus, Ballot, Entry, EntryId, NodeId, SequenceNumber},
+    utils::{AcceptStatus, Ballot, Entry, NodeId, SequenceNumber},
 };
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -72,7 +72,7 @@ where
     /// The sequence number of this message in the leader-to-follower accept sequence
     pub seq_num: SequenceNumber,
     /// Entry to be replicated.
-    pub entry: (EntryId, T),
+    pub entry: T,
     /// The index to place the entry.
     pub slot_idx: SlotId,
     /// Way in which value should be accepted
@@ -89,7 +89,7 @@ where
     /// The current round.
     pub n: Ballot,
     /// Entry to be replicated.
-    pub entry: (EntryId, T),
+    pub entry: T,
     /// The index where the entry was placed.
     pub slot_idx: SlotId,
     /// Way in which value was accepted
@@ -108,7 +108,7 @@ where
     /// The sequence number of this message in the leader-to-follower accept sequence
     pub seq_num: SequenceNumber,
     /// Entry to be decided.
-    pub entry: (EntryId, T),
+    pub entry: T,
     /// Way the entry was decided
     pub accept_status: AcceptStatus,
     /// The index to place the decided entry.
@@ -140,7 +140,7 @@ where
     AcceptSync(AcceptSync<T>),
     Accept(Accept<T>),
     Accepted(Accepted<T>),
-    ProposalForward((EntryId, T)),
+    ProposalForward(T),
     NotAccepted(NotAccepted),
     Decide(Decide<T>),
 }

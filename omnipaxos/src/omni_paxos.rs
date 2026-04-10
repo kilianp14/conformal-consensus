@@ -5,7 +5,7 @@ use crate::{
     sequence_paxos::SequencePaxos,
     utils::{
         defaults::{BUFFER_SIZE, ELECTION_TIMEOUT, RESEND_MESSAGE_TIMEOUT},
-        Ballot, Entry, EntryId, LogEntry, LogicalClock, Mode, NodeId, Phase,
+        Ballot, Entry, LogEntry, LogicalClock, Mode, NodeId, Phase,
     },
 };
 #[cfg(any(feature = "toml_config", feature = "serde"))]
@@ -65,7 +65,6 @@ impl OmniPaxosConfig {
             resend_message_clock: LogicalClock::with(
                 self.server_config.resend_message_tick_timeout,
             ),
-            entry_id: (self.server_config.pid, 0),
             ble: BallotLeaderElection::with(self.clone().into()),
             seq_paxos: SequencePaxos::with(self.clone().into()),
         })
@@ -183,8 +182,6 @@ where
 {
     seq_paxos: SequencePaxos<T>,
     ble: BallotLeaderElection,
-    // Used to differ between concurrent proposals of the same entry
-    entry_id: EntryId,
     election_clock: LogicalClock,
     resend_message_clock: LogicalClock,
 }
@@ -261,8 +258,7 @@ where
 
     /// Append an entry to the replicated log.
     pub fn append(&mut self, entry: T) {
-        self.entry_id.1 += 1;
-        self.seq_paxos.append((self.entry_id, entry))
+        self.seq_paxos.append(entry)
     }
 
     /// Handles re-establishing a connection to a previously disconnected peer.

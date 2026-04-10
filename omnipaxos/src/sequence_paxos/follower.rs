@@ -1,8 +1,7 @@
 use crate::{
     sequence_paxos::{messages::*, utils::LogSync, Promise, SequencePaxos},
     utils::{
-        AcceptStatus, Ballot, Entry, EntryId, LogEntry, MessageStatus, NodeId, Phase, Role,
-        SequenceNumber,
+        AcceptStatus, Ballot, Entry, LogEntry, MessageStatus, NodeId, Phase, Role, SequenceNumber,
     },
 };
 #[cfg(feature = "logging")]
@@ -58,10 +57,10 @@ where
             // Accept all the undecided slots after the decided index
             let mut slot_idx = accsync.decided_idx;
             for log_entry in self.internal_storage.get_suffix(slot_idx) {
-                if let LogEntry::Undecided(entry_id, entry, accept_status) = log_entry {
+                if let LogEntry::Undecided(entry, accept_status) = log_entry {
                     let accepted = Accepted {
                         n: accsync.n,
-                        entry: (entry_id, entry),
+                        entry,
                         slot_idx,
                         accept_status,
                     };
@@ -73,14 +72,12 @@ where
         }
     }
 
-    pub(crate) fn fp_fast_propose(&mut self, entry: (EntryId, T)) {
+    pub(crate) fn fp_fast_propose(&mut self, entry: T) {
         let accept_status = AcceptStatus::FpFastAccepted;
         // Add to storage
-        let slot_idx = self.internal_storage.add_entry(LogEntry::Undecided(
-            entry.0,
-            entry.1.clone(),
-            accept_status,
-        ));
+        let slot_idx = self
+            .internal_storage
+            .add_entry(LogEntry::Undecided(entry.clone(), accept_status));
 
         // Send fast accept to all peers
         let acc = Accept {
@@ -125,7 +122,7 @@ where
             }
             self.internal_storage.insert_at_index(
                 acc.slot_idx,
-                LogEntry::Undecided(acc.entry.0, acc.entry.1.clone(), acc.accept_status),
+                LogEntry::Undecided(acc.entry.clone(), acc.accept_status),
             );
             let accepted = Accepted {
                 n: self.internal_storage.get_promise(),
@@ -157,7 +154,7 @@ where
             // Fast Paxos Slow Accepts should always override
             self.internal_storage.insert_at_index(
                 acc.slot_idx,
-                LogEntry::Undecided(acc.entry.0, acc.entry.1.clone(), acc.accept_status),
+                LogEntry::Undecided(acc.entry.clone(), acc.accept_status),
             );
             let accepted = Accepted {
                 n: acc.n,
@@ -185,7 +182,7 @@ where
             }
             self.internal_storage.insert_at_index(
                 acc.slot_idx,
-                LogEntry::Undecided(acc.entry.0, acc.entry.1.clone(), acc.accept_status),
+                LogEntry::Undecided(acc.entry.clone(), acc.accept_status),
             );
             let accepted = Accepted {
                 n: acc.n,
@@ -207,13 +204,13 @@ where
                 debug!(self.logger, "Pid {}. Incoming Decide: {:?}", self.pid, dec);
             }
             if let Some(own_proposed_entry_at_slot) = self.pending_proposals.remove(&dec.slot_idx) {
-                if own_proposed_entry_at_slot.0 != dec.entry.0 {
+                if own_proposed_entry_at_slot != dec.entry {
                     // The slot was taken by another entry; retry our proposal
                     self.append(own_proposed_entry_at_slot);
                 }
             }
             self.internal_storage
-                .insert_at_index(dec.slot_idx, LogEntry::Decided(dec.entry.0, dec.entry.1));
+                .insert_at_index(dec.slot_idx, LogEntry::Decided(dec.entry));
             if dec.slot_idx >= self.internal_storage.get_decided_idx() {
                 self.internal_storage.set_decided_idx(dec.slot_idx + 1);
             }

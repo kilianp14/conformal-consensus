@@ -5,7 +5,7 @@ use crate::{
         log::MemoryStorage,
         utils::{LeaderState, SlotId},
     },
-    utils::{AcceptStatus, Ballot, Entry, EntryId, Mode, NodeId, Phase, Role, SequenceNumber},
+    utils::{AcceptStatus, Ballot, Entry, Mode, NodeId, Phase, Role, SequenceNumber},
     OmniPaxosConfig,
 };
 #[cfg(feature = "logging")]
@@ -84,9 +84,9 @@ where
     peers: Vec<NodeId>, // excluding self pid
     state: (Role, Phase),
     // Incoming proposals while node is still in prepare phase
-    buffered_proposals: Vec<(EntryId, T)>,
+    buffered_proposals: Vec<T>,
     // Proposals of this node currently in transit
-    pending_proposals: HashMap<SlotId, (EntryId, T)>,
+    pending_proposals: HashMap<SlotId, T>,
     outgoing: Vec<PaxosMessage<T>>,
     leader_state: LeaderState<T>,
     cached_promise_message: Option<Promise<T>>,
@@ -177,7 +177,7 @@ where
     }
 
     /// Append an entry to the replicated log.
-    pub(crate) fn append(&mut self, entry: (EntryId, T)) {
+    pub(crate) fn append(&mut self, entry: T) {
         match self.state {
             (Role::Leader, Phase::Accept) => self.op_accept_entry_leader(entry),
             (Role::Follower, Phase::Accept) => {
@@ -238,7 +238,7 @@ where
         self.send_msg_to(pid, PaxosMsg::PrepareReq(prepreq));
     }
 
-    pub(crate) fn op_forward_proposal(&mut self, entry: (EntryId, T)) {
+    pub(crate) fn op_forward_proposal(&mut self, entry: T) {
         let leader = self.get_current_leader();
         if leader > 0 && self.pid != leader {
             let pf = PaxosMsg::ProposalForward(entry.clone());

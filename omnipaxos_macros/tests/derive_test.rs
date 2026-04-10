@@ -2,7 +2,7 @@
 fn build_op_test() {
     use omnipaxos::{macros::Entry, ClusterConfig, OmniPaxos, OmniPaxosConfig, ServerConfig};
 
-    #[derive(Clone, Debug, Entry)]
+    #[derive(Clone, Debug, PartialEq, Eq, Entry)]
     struct TestEntry {
         pub _field1: u64,
         pub _field2: String,
