@@ -1,39 +1,7 @@
 #[cfg(feature = "logging")]
-use crate::utils::create_logger;
-use crate::{
-    utils::{Mode, NodeId},
-    OmniPaxosConfig,
-};
+use crate::utils::Mode;
 #[cfg(feature = "logging")]
 use slog::{error, warn, Logger};
-
-/// Configuration for `SequencePaxos`.
-/// # Fields
-/// * `pid`: The unique identifier of this node. Must not be 0.
-/// * `peers`: The peers of this node i.e. the `pid`s of the other servers in the configuration.
-/// * `buffer_size`: The buffer size for outgoing messages.
-/// * `mode`: Operating mode of sequence_paxos (OmniPaxos or FastPaxos)
-/// * `logger_file_path`: The path where the default logger logs events.
-#[derive(Clone, Debug)]
-pub(crate) struct ConformalModePredictorConfig {
-    pid: NodeId,
-    #[cfg(feature = "logging")]
-    logger_file_path: Option<String>,
-    #[cfg(feature = "logging")]
-    custom_logger: Option<Logger>,
-}
-
-impl From<OmniPaxosConfig> for ConformalModePredictorConfig {
-    fn from(config: OmniPaxosConfig) -> Self {
-        ConformalModePredictorConfig {
-            pid: config.server_config.pid,
-            #[cfg(feature = "logging")]
-            logger_file_path: config.server_config.logger_file_path,
-            #[cfg(feature = "logging")]
-            custom_logger: config.server_config.custom_logger,
-        }
-    }
-}
 
 #[derive(Clone, Debug)]
 pub(crate) struct Features {
@@ -65,21 +33,12 @@ pub(crate) struct ConformalModePredictor {
 }
 
 impl ConformalModePredictor {
-    pub fn with(config: ConformalModePredictorConfig) -> Self {
+    pub fn with(#[cfg(feature = "logging")] logger: Logger) -> Self {
         Self {
             model,
             lambda_hat: None,
             #[cfg(feature = "logging")]
-            logger: {
-                if let Some(logger) = config.custom_logger {
-                    logger
-                } else {
-                    let s = config
-                        .logger_file_path
-                        .unwrap_or_else(|| format!("logs/paxos_{}.log", config.pid));
-                    create_logger(s.as_str())
-                }
-            },
+            logger,
         }
     }
 

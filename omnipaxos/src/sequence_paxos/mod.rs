@@ -11,15 +11,24 @@ use crate::{
 #[cfg(feature = "logging")]
 use slog::{info, Logger};
 use std::{collections::HashMap, fmt::Debug, vec};
+#[cfg(feature = "adaptive")]
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
 
 mod follower;
 mod leader;
 mod log;
 /// The different messages used by the SequencePaxos layer
 pub mod messages;
+#[cfg(feature = "adaptive")]
+mod predictor;
 mod utils;
 
 use messages::*;
+#[cfg(feature = "adaptive")]
+use predictor::{ConformalModePredictor, Features, Label};
 
 /// Configuration for `SequencePaxos`.
 /// # Fields
@@ -83,16 +92,12 @@ where
     cached_promise_message: Option<Promise<T>>,
     // Keeps track of sequence of accepts from leader where AcceptSync = 1
     current_seq_num: SequenceNumber,
-    // Keeps track of number of accept messages since last measurement
     #[cfg(feature = "adaptive")]
-    other_proposals_count: u64,
-    // Timestamp when the incoming accept messages where last polled
+    conformal_mode_predictor: ConformalModePredictor,
     #[cfg(feature = "adaptive")]
-    last_proposals_measurement: std::time::Instant,
+    fast_quorum_latency_in_s: Option<f64>,
     #[cfg(feature = "adaptive")]
-    successful_fast_paths: u64,
-    #[cfg(feature = "adaptive")]
-    total_fast_path_tries: u64,
+    incoming_proposals_timestamps: VecDeque<Instant>,
     #[cfg(feature = "logging")]
     logger: Logger,
 }
@@ -109,6 +114,19 @@ where
         let num_nodes = &peers.len() + 1;
         let leader = Ballot::default();
         let outgoing = Vec::with_capacity(config.buffer_size);
+
+        #[cfg(feature = "logging")]
+        let logger = {
+            if let Some(log) = config.custom_logger {
+                log
+            } else {
+                let s = config
+                    .logger_file_path
+                    .clone()
+                    .unwrap_or_else(|| format!("logs/paxos_{}.log", pid));
+                create_logger(s.as_str())
+            }
+        };
         let mut paxos = SequencePaxos {
             internal_storage: MemoryStorage::new(),
             pid,
@@ -122,24 +140,16 @@ where
             cached_promise_message: None,
             current_seq_num: SequenceNumber::default(),
             #[cfg(feature = "adaptive")]
-            other_proposals_count: 0,
+            conformal_mode_predictor: ConformalModePredictor::with(
+                #[cfg(feature = "logging")]
+                logger.clone(),
+            ),
             #[cfg(feature = "adaptive")]
-            last_proposals_measurement: std::time::Instant::now(),
+            fast_quorum_latency_in_s: None,
             #[cfg(feature = "adaptive")]
-            successful_fast_paths: 0,
-            #[cfg(feature = "adaptive")]
-            total_fast_path_tries: 0,
+            incoming_proposals_timestamps: VecDeque::with_capacity(50000),
             #[cfg(feature = "logging")]
-            logger: {
-                if let Some(logger) = config.custom_logger {
-                    logger
-                } else {
-                    let s = config
-                        .logger_file_path
-                        .unwrap_or_else(|| format!("logs/paxos_{}.log", pid));
-                    create_logger(s.as_str())
-                }
-            },
+            logger,
         };
         paxos.internal_storage.set_promise(leader);
         #[cfg(feature = "logging")]
@@ -151,11 +161,6 @@ where
 
     pub(crate) fn get_state(&self) -> &(Role, Phase) {
         &self.state
-    }
-
-    #[cfg(feature = "adaptive")]
-    pub(crate) fn set_operating_mode(&mut self, mode: Mode) {
-        self.mode = mode;
     }
 
     /// Detects if a message has been sent but not been received.
@@ -175,10 +180,33 @@ where
     pub(crate) fn append(&mut self, entry: (EntryId, T)) {
         match self.state {
             (Role::Leader, Phase::Accept) => self.op_accept_entry_leader(entry),
-            (Role::Follower, Phase::Accept) => match self.mode {
-                Mode::OmniPaxos => self.op_forward_proposal(entry),
-                Mode::FastPaxos => self.fp_fast_propose(entry),
-            },
+            (Role::Follower, Phase::Accept) => {
+                #[cfg(feature = "adaptive")]
+                {
+                    if let Some(fql) = self.fast_quorum_latency_in_s {
+                        let now = Instant::now();
+                        let one_second_ago = now - Duration::from_secs(1);
+                        while self
+                            .incoming_proposals_timestamps
+                            .front()
+                            .is_some_and(|&t| t <= one_second_ago)
+                        {
+                            self.incoming_proposals_timestamps.pop_front();
+                        }
+                        let other_nodes_proposals_per_s =
+                            self.incoming_proposals_timestamps.len() as f64;
+                        let features = Features {
+                            fast_quorum_latency_in_s: fql,
+                            other_nodes_proposals_per_s,
+                        };
+                        self.mode = self.conformal_mode_predictor.get_new_mode(features)
+                    }
+                }
+                match self.mode {
+                    Mode::OmniPaxos => self.op_forward_proposal(entry),
+                    Mode::FastPaxos => self.fp_fast_propose(entry),
+                }
+            }
             _ => self.buffered_proposals.push(entry),
         }
     }
@@ -239,28 +267,10 @@ where
         }
     }
 
-    /// Returns the estimated number of Accept messages received per second.
+    /// Setting latency to reach a fast quorum
     #[cfg(feature = "adaptive")]
-    pub(crate) fn get_other_proposals_per_second(&mut self) -> f64 {
-        let elapsed = self.last_proposals_measurement.elapsed().as_secs_f64();
-        let current_throughput = self.other_proposals_count as f64 / elapsed;
-        self.other_proposals_count = 0;
-        self.last_proposals_measurement = std::time::Instant::now();
-        current_throughput
-    }
-
-    /// Returns the successful fast paths compared to the total fast paths tried (if any)
-    /// Restarts the rate computation
-    #[cfg(feature = "adaptive")]
-    pub(crate) fn get_successful_fast_path_rate(&mut self) -> Option<f64> {
-        let fast_path_rate = if self.total_fast_path_tries == 0 {
-            None
-        } else {
-            Some(self.successful_fast_paths as f64 / self.total_fast_path_tries as f64)
-        };
-        self.total_fast_path_tries = 0;
-        self.successful_fast_paths = 0;
-        fast_path_rate
+    pub(crate) fn set_fast_quorum_latency(&mut self, latency: Option<f64>) {
+        self.fast_quorum_latency_in_s = latency;
     }
 
     /// Handle an incoming message.
@@ -278,23 +288,22 @@ where
 
             // Accept Phase
             PaxosMsg::ProposalForward(entry) => self.append(entry),
-            PaxosMsg::Accept(acc) => match acc.accept_status {
-                AcceptStatus::FpFastAccepted => {
-                    #[cfg(feature = "adaptive")]
+            PaxosMsg::Accept(acc) => {
+                #[cfg(feature = "adaptive")]
+                {
+                    // Track proposals from other nodes
+                    if acc.accept_status == AcceptStatus::FpFastAccepted
+                        || acc.accept_status == AcceptStatus::OpAccepted
                     {
-                        self.other_proposals_count += 1;
+                        self.incoming_proposals_timestamps.push_back(Instant::now());
                     }
-                    self.handle_fast_accept(acc);
                 }
-                AcceptStatus::OpAccepted => {
-                    #[cfg(feature = "adaptive")]
-                    {
-                        self.other_proposals_count += 1;
-                    }
-                    self.handle_omnipaxos_accept(acc)
+                match acc.accept_status {
+                    AcceptStatus::FpFastAccepted => self.handle_fast_accept(acc),
+                    AcceptStatus::OpAccepted => self.handle_omnipaxos_accept(acc),
+                    AcceptStatus::FpSlowAccepted => self.handle_slow_accept(acc),
                 }
-                AcceptStatus::FpSlowAccepted => self.handle_slow_accept(acc),
-            },
+            }
             PaxosMsg::Accepted(accepted) => self.handle_accepted(accepted, m.from),
             PaxosMsg::NotAccepted(not_acc) => self.handle_notaccepted(not_acc, m.from),
 

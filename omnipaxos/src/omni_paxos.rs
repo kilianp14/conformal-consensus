@@ -8,11 +8,6 @@ use crate::{
         Ballot, Entry, EntryId, LogEntry, LogicalClock, Mode, NodeId, Phase,
     },
 };
-#[cfg(feature = "adaptive")]
-use crate::{
-    predictor::{ConformalModePredictor, Features},
-    utils::defaults::MODE_CHANGE_TIMEOUT,
-};
 #[cfg(any(feature = "toml_config", feature = "serde"))]
 use serde::Deserialize;
 #[cfg(feature = "serde")]
@@ -70,13 +65,9 @@ impl OmniPaxosConfig {
             resend_message_clock: LogicalClock::with(
                 self.server_config.resend_message_tick_timeout,
             ),
-            #[cfg(feature = "adaptive")]
-            mode_change_clock: LogicalClock::with(self.server_config.mode_change_tick_timeout),
             entry_id: (self.server_config.pid, 0),
             ble: BallotLeaderElection::with(self.clone().into()),
             seq_paxos: SequencePaxos::with(self.clone().into()),
-            #[cfg(feature = "adaptive")]
-            conformal_mode_predictor: ConformalModePredictor::with(self.into()),
         })
     }
 }
@@ -137,9 +128,6 @@ pub struct ServerConfig {
     pub election_tick_timeout: u64,
     /// The number of calls to `tick()` before a message is considered dropped and thus resent. Must not be 0.
     pub resend_message_tick_timeout: u64,
-    /// The number of calls to `tick()` before sequence_paxos operating mode is updated
-    #[cfg(feature = "adaptive")]
-    pub mode_change_tick_timeout: u64,
     /// The buffer size for outgoing messages.
     pub buffer_size: usize,
     /// Custom priority for this node to be elected as the leader.
@@ -177,8 +165,6 @@ impl Default for ServerConfig {
             mode: Mode::OmniPaxos,
             election_tick_timeout: ELECTION_TIMEOUT,
             resend_message_tick_timeout: RESEND_MESSAGE_TIMEOUT,
-            #[cfg(feature = "adaptive")]
-            mode_change_tick_timeout: MODE_CHANGE_TIMEOUT,
             buffer_size: BUFFER_SIZE,
             leader_priority: 0,
             #[cfg(feature = "logging")]
@@ -197,14 +183,10 @@ where
 {
     seq_paxos: SequencePaxos<T>,
     ble: BallotLeaderElection,
-    #[cfg(feature = "adaptive")]
-    conformal_mode_predictor: ConformalModePredictor,
     // Used to differ between concurrent proposals of the same entry
     entry_id: EntryId,
     election_clock: LogicalClock,
     resend_message_clock: LogicalClock,
-    #[cfg(feature = "adaptive")]
-    mode_change_clock: LogicalClock,
 }
 
 impl<T> OmniPaxos<T>
@@ -299,21 +281,6 @@ where
         if self.resend_message_clock.tick_and_check_timeout() {
             self.seq_paxos.resend_message_timeout();
         }
-        #[cfg(feature = "adaptive")]
-        {
-            if self.mode_change_clock.tick_and_check_timeout() {
-                let fast_quorum_latency = self.ble.get_fast_quorum_latency();
-                let other_nodes_proposals = self.seq_paxos.get_other_proposals_per_second();
-                if let Some(fql) = fast_quorum_latency {
-                    let features = Features {
-                        fast_quorum_latency_in_s: fql,
-                        other_nodes_proposals_per_s: other_nodes_proposals,
-                    };
-                    self.seq_paxos
-                        .set_operating_mode(self.conformal_mode_predictor.get_new_mode(features));
-                }
-            }
-        }
     }
 
     /// Manually attempt to become the leader by incrementing this instance's Ballot. Calling this
@@ -340,6 +307,9 @@ where
         if let Some(new_leader) = self.ble.hb_timeout(self.get_promise()) {
             self.seq_paxos.handle_leader(new_leader);
         }
+        #[cfg(feature = "adaptive")]
+        self.seq_paxos
+            .set_fast_quorum_latency(self.ble.get_fast_quorum_latency());
     }
 }
 

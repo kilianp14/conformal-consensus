@@ -61,7 +61,7 @@ pub(crate) mod defaults {
     #[cfg(feature = "adaptive")]
     pub(crate) const LATENCY_TRACKING_WINDOW_SIZE: usize = 10;
     #[cfg(feature = "adaptive")]
-    pub(crate) const MODE_CHANGE_TIMEOUT: u64 = 1;
+    pub(crate) const PROPOSAL_TRACKING_WINDOW_SIZE: usize = 10;
     #[cfg(feature = "adaptive")]
     pub(crate) const CALIBRATION_SET_SIZE: u64 = 10000;
     #[cfg(feature = "adaptive")]

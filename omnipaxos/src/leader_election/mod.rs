@@ -46,7 +46,7 @@ pub(crate) struct BallotLeaderElection {
     quorum: Quorum,
     /// Vector which holds all the outgoing messages of the BLE instance.
     outgoing: Vec<BLEMessage>,
-    /// Per-node rolling window of one-way latencies (RTT / 2) in microseconds.
+    /// Per-node rolling window of one-way latencies (RTT / 2) in seconds.
     #[cfg(feature = "adaptive")]
     latency_histories: HashMap<NodeId, VecDeque<f64>>,
     /// Maximum size of the rolling window.
