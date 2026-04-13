@@ -1,3 +1,5 @@
+#[cfg(feature = "adaptive")]
+use crate::sequence_paxos::predictor::{Features, Label};
 use crate::{
     sequence_paxos::{messages::*, utils::LogSync, Promise, SequencePaxos},
     utils::{
@@ -72,7 +74,11 @@ where
         }
     }
 
-    pub(crate) fn fp_fast_propose(&mut self, entry: T) {
+    pub(crate) fn fp_fast_propose(
+        &mut self,
+        entry: T,
+        #[cfg(feature = "adaptive")] features: Features,
+    ) {
         let accept_status = AcceptStatus::FpFastAccepted;
         // Add to storage
         let slot_idx = self
@@ -88,7 +94,12 @@ where
             accept_status,
         };
         self.send_to_all_peers(PaxosMsg::Accept(acc));
+
+        #[cfg(not(feature = "adaptive"))]
         self.pending_proposals.insert(slot_idx, entry.clone());
+        #[cfg(feature = "adaptive")]
+        self.pending_proposals
+            .insert(slot_idx, (entry.clone(), Some(features)));
 
         // Send own accepted to leader or handle if I am leader
         let accepted = Accepted {
@@ -204,9 +215,28 @@ where
                 debug!(self.logger, "Pid {}. Incoming Decide: {:?}", self.pid, dec);
             }
             if let Some(own_proposed_entry_at_slot) = self.pending_proposals.remove(&dec.slot_idx) {
-                if own_proposed_entry_at_slot != dec.entry {
+                #[cfg(not(feature = "adaptive"))]
+                let own_prop_entry = own_proposed_entry_at_slot;
+                #[cfg(feature = "adaptive")]
+                let (own_prop_entry, features) = own_proposed_entry_at_slot;
+                #[cfg(feature = "adaptive")]
+                {
+                    if let Some(features) = features {
+                        if !self.calibrated
+                            && dec.accept_status == AcceptStatus::FpFastAccepted
+                            && own_prop_entry == dec.entry
+                        {
+                            // Fast path succeeded
+                            self.calibration_data.push((features, Label::Success));
+                        } else {
+                            self.calibration_data.push((features, Label::NoSuccess));
+                        }
+                    }
+                }
+
+                if own_prop_entry != dec.entry {
                     // The slot was taken by another entry; retry our proposal
-                    self.append(own_proposed_entry_at_slot);
+                    self.append(own_prop_entry);
                 }
             }
             self.internal_storage

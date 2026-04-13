@@ -1,8 +1,6 @@
 #[cfg(feature = "logging")]
 use crate::utils::Mode;
 #[cfg(feature = "logging")]
-use slog::{error, warn, Logger};
-
 #[derive(Clone, Debug)]
 pub(crate) struct Features {
     pub(crate) fast_quorum_latency_in_s: f64,
@@ -15,7 +13,7 @@ pub(crate) enum Label {
     NoSuccess,
 }
 
-fn model(x: Features) -> Vec<(Label, f64)> {
+fn model(x: &Features) -> Vec<(Label, f64)> {
     let successful_pred = 1.0
         / (1.0
             + (2.0 * x.fast_quorum_latency_in_s * x.other_nodes_proposals_per_s).powf(4.0 / 3.0));
@@ -26,44 +24,43 @@ fn model(x: Features) -> Vec<(Label, f64)> {
 }
 
 pub(crate) struct ConformalModePredictor {
-    model: fn(Features) -> Vec<(Label, f64)>, // Softmax/ Sigmoid
-    lambda_hat: Option<f64>,                  // Bounded between 0 and 1
-    #[cfg(feature = "logging")]
-    logger: Logger,
+    model: fn(&Features) -> Vec<(Label, f64)>, // Softmax/ Sigmoid
+    lambda_hat: Option<f64>,                   // Bounded between 0 and 1
 }
 
 impl ConformalModePredictor {
-    pub fn with(#[cfg(feature = "logging")] logger: Logger) -> Self {
+    pub fn new() -> Self {
         Self {
             model,
             lambda_hat: None,
-            #[cfg(feature = "logging")]
-            logger,
         }
     }
 
-    pub fn calibrate(&mut self, calibration_set: &[(Features, Label)], alpha: f64) {
+    pub fn calibrate(
+        &mut self,
+        calibration_set: &[(Features, Label)],
+        alpha: f64,
+    ) -> Result<(f64, f64), String> {
         let n_calibration = calibration_set.len() as f64;
         if n_calibration <= 0.0 {
-            #[cfg(feature = "logging")]
-            warn!(
-                self.logger,
-                "Calibration data empty. No calibration performed"
-            );
-            return;
+            return Err("Calibration data empty. No calibration performed".to_string());
         }
         let lambda_threshold = |lambda: f64| {
             self.empirical_risk(calibration_set, lambda)
                 - ((n_calibration + 1.0) / n_calibration * alpha - 1.0 / n_calibration)
         };
-        self.lambda_hat = brentq(lambda_threshold, 0.0, 1.0, 1e-12);
-        if self.lambda_hat.is_none() {
-            #[cfg(feature = "logging")]
-            error!(self.logger, "No lambda found. Calibration unsuccessful");
+        match brentq(lambda_threshold, 0.0, 1.0, 1e-12) {
+            Some(l) => {
+                self.lambda_hat = Some(l);
+                Ok((l, self.empirical_risk(calibration_set, l)))
+            }
+            None => Err(
+                "No valid lambda found within bounds [0, 1]. Calibration unsuccessful".to_string(),
+            ),
         }
     }
 
-    pub fn get_new_mode(&self, features: Features) -> Mode {
+    pub fn get_new_mode(&self, features: &Features) -> Mode {
         match self.lambda_hat {
             Some(l_hat) => {
                 let labels = self.get_prediction_set_with_lambda(features, l_hat);
@@ -79,7 +76,7 @@ impl ConformalModePredictor {
     fn empirical_risk(&self, calibration_set: &[(Features, Label)], lambda: f64) -> f64 {
         let mut total_loss = 0.0;
         for (features, true_label) in calibration_set {
-            let prediction_set = self.get_prediction_set_with_lambda(features.clone(), lambda);
+            let prediction_set = self.get_prediction_set_with_lambda(features, lambda);
             // Bad case is when fast path does not succeed but this failure is not predicted
             total_loss +=
                 if true_label == &Label::NoSuccess && !prediction_set.contains(&Label::NoSuccess) {
@@ -91,7 +88,7 @@ impl ConformalModePredictor {
         total_loss / calibration_set.len() as f64
     }
 
-    fn get_prediction_set_with_lambda(&self, features: Features, lambda: f64) -> Vec<Label> {
+    fn get_prediction_set_with_lambda(&self, features: &Features, lambda: f64) -> Vec<Label> {
         (self.model)(features)
             .into_iter()
             .filter_map(|(label, score)| {

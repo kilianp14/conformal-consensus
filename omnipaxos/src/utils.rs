@@ -57,10 +57,6 @@ pub(crate) mod defaults {
     pub(crate) const RESEND_MESSAGE_TIMEOUT: u64 = 100;
     #[cfg(feature = "adaptive")]
     pub(crate) const LATENCY_TRACKING_WINDOW_SIZE: usize = 10;
-    #[cfg(feature = "adaptive")]
-    pub(crate) const CALIBRATION_SET_SIZE: u64 = 10000;
-    #[cfg(feature = "adaptive")]
-    pub(crate) const SIGNIFICANCE_LEVEL: f64 = 0.1;
 }
 
 /// Used for checking the ordering of message sequences in the accept phase

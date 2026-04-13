@@ -335,6 +335,7 @@ where
         }
 
         // Count number of votes for every entry
+        #[allow(clippy::type_complexity)]
         let mut vote_counts: Vec<(&T, (usize, usize, usize, usize))> =
             Vec::with_capacity(self.quorum.total_nodes);
 

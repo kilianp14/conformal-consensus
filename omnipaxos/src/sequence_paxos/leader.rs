@@ -134,7 +134,12 @@ where
         let slot_idx = self
             .internal_storage
             .add_entry(LogEntry::Undecided(entry.clone(), accept_status));
+
+        #[cfg(not(feature = "adaptive"))]
         self.pending_proposals.insert(slot_idx, entry.clone());
+        #[cfg(feature = "adaptive")]
+        self.pending_proposals
+            .insert(slot_idx, (entry.clone(), None));
 
         // Send Accept messages
         for pid in self.leader_state.get_promised_followers() {
@@ -169,7 +174,7 @@ where
                 accepted.accept_status,
             );
             #[cfg(feature = "logging")]
-            info!(
+            debug!(
                 self.logger,
                 "Got {:?} from {} for slot {:?} => LeaderAction: {:?}",
                 accepted.accept_status,
@@ -213,9 +218,13 @@ where
                     if let Some(own_proposed_entry_at_slot) =
                         self.pending_proposals.remove(&slot_idx)
                     {
-                        if own_proposed_entry_at_slot != entry {
+                        #[cfg(not(feature = "adaptive"))]
+                        let own_prop_entry = own_proposed_entry_at_slot;
+                        #[cfg(feature = "adaptive")]
+                        let own_prop_entry = own_proposed_entry_at_slot.0;
+                        if own_prop_entry != entry {
                             // The slot was taken by another entry; retry our proposal
-                            self.append(own_proposed_entry_at_slot);
+                            self.append(own_prop_entry);
                         }
                     }
                     self.internal_storage

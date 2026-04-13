@@ -14,11 +14,7 @@ use serde::Deserialize;
 use serde::Serialize;
 #[cfg(feature = "toml_config")]
 use std::fs;
-use std::{
-    error::Error,
-    fmt::{Debug, Display},
-    ops::RangeBounds,
-};
+use std::{fmt::Debug, ops::RangeBounds};
 
 /// Configuration for `OmniPaxos`.
 /// # Fields
@@ -261,6 +257,12 @@ where
         self.seq_paxos.append(entry)
     }
 
+    /// Calibrate the conformal predictor using previously collected data
+    #[cfg(feature = "adaptive")]
+    pub fn calibrate(&mut self, significance_level: f64) {
+        self.seq_paxos.calibrate(significance_level);
+    }
+
     /// Handles re-establishing a connection to a previously disconnected peer.
     /// This should only be called if the underlying network implementation indicates that a connection has been re-established.
     pub fn reconnected(&mut self, pid: NodeId) {
@@ -306,25 +308,5 @@ where
         #[cfg(feature = "adaptive")]
         self.seq_paxos
             .set_fast_quorum_latency(self.ble.get_fast_quorum_latency());
-    }
-}
-
-/// An error returning the proposal that was failed due to that the current configuration is stopped.
-#[derive(Copy, Clone, Debug)]
-pub enum CompactionErr {
-    /// Snapshot was called with an index that is not decided yet. Returns the currently decided index.
-    UndecidedIndex(usize),
-    /// Snapshot was called with an index which is already trimmed. Returns the currently compacted index.
-    TrimmedIndex(usize),
-    /// Trim was called with an index that is not decided by all servers yet. Returns the index decided by ALL servers currently.
-    NotAllDecided(usize),
-    /// Trim was called at a follower node. Trim must be called by the leader, which is the returned NodeId.
-    NotCurrentLeader(NodeId),
-}
-
-impl Error for CompactionErr {}
-impl Display for CompactionErr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Debug::fmt(self, f)
     }
 }

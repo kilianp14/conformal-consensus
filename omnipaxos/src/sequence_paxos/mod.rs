@@ -85,19 +85,26 @@ where
     state: (Role, Phase),
     // Incoming proposals while node is still in prepare phase
     buffered_proposals: Vec<T>,
-    // Proposals of this node currently in transit
-    pending_proposals: HashMap<SlotId, T>,
     outgoing: Vec<PaxosMessage<T>>,
     leader_state: LeaderState<T>,
     cached_promise_message: Option<Promise<T>>,
     // Keeps track of sequence of accepts from leader where AcceptSync = 1
     current_seq_num: SequenceNumber,
+    // Proposals of this node currently in transit
+    #[cfg(not(feature = "adaptive"))]
+    pending_proposals: HashMap<SlotId, T>,
+    #[cfg(feature = "adaptive")]
+    pending_proposals: HashMap<SlotId, (T, Option<Features>)>,
     #[cfg(feature = "adaptive")]
     conformal_mode_predictor: ConformalModePredictor,
     #[cfg(feature = "adaptive")]
     fast_quorum_latency_in_s: Option<f64>,
     #[cfg(feature = "adaptive")]
     incoming_proposals_timestamps: VecDeque<Instant>,
+    #[cfg(feature = "adaptive")]
+    calibration_data: Vec<(Features, Label)>,
+    #[cfg(feature = "adaptive")]
+    calibrated: bool,
     #[cfg(feature = "logging")]
     logger: Logger,
 }
@@ -140,14 +147,15 @@ where
             cached_promise_message: None,
             current_seq_num: SequenceNumber::default(),
             #[cfg(feature = "adaptive")]
-            conformal_mode_predictor: ConformalModePredictor::with(
-                #[cfg(feature = "logging")]
-                logger.clone(),
-            ),
+            conformal_mode_predictor: ConformalModePredictor::new(),
             #[cfg(feature = "adaptive")]
             fast_quorum_latency_in_s: None,
             #[cfg(feature = "adaptive")]
             incoming_proposals_timestamps: VecDeque::with_capacity(50000),
+            #[cfg(feature = "adaptive")]
+            calibration_data: Vec::with_capacity(10000),
+            #[cfg(feature = "adaptive")]
+            calibrated: false,
             #[cfg(feature = "logging")]
             logger,
         };
@@ -181,6 +189,13 @@ where
         match self.state {
             (Role::Leader, Phase::Accept) => self.op_accept_entry_leader(entry),
             (Role::Follower, Phase::Accept) => {
+                #[cfg(not(feature = "adaptive"))]
+                {
+                    match self.mode {
+                        Mode::OmniPaxos => self.op_forward_proposal(entry),
+                        Mode::FastPaxos => self.fp_fast_propose(entry),
+                    }
+                }
                 #[cfg(feature = "adaptive")]
                 {
                     if let Some(fql) = self.fast_quorum_latency_in_s {
@@ -199,12 +214,12 @@ where
                             fast_quorum_latency_in_s: fql,
                             other_nodes_proposals_per_s,
                         };
-                        self.mode = self.conformal_mode_predictor.get_new_mode(features)
+                        self.mode = self.conformal_mode_predictor.get_new_mode(&features);
+                        match self.mode {
+                            Mode::OmniPaxos => self.op_forward_proposal(entry),
+                            Mode::FastPaxos => self.fp_fast_propose(entry, features),
+                        }
                     }
-                }
-                match self.mode {
-                    Mode::OmniPaxos => self.op_forward_proposal(entry),
-                    Mode::FastPaxos => self.fp_fast_propose(entry),
                 }
             }
             _ => self.buffered_proposals.push(entry),
@@ -271,6 +286,47 @@ where
     #[cfg(feature = "adaptive")]
     pub(crate) fn set_fast_quorum_latency(&mut self, latency: Option<f64>) {
         self.fast_quorum_latency_in_s = latency;
+    }
+
+    /// Calibrate
+    #[cfg(feature = "adaptive")]
+    pub(crate) fn calibrate(&mut self, significance_level: f64) {
+        if self.calibrated {
+            #[cfg(feature = "logging")]
+            slog::warn!(self.logger, "Already successfully calibrated; skipping.");
+            return;
+        }
+        if !(0.0..=1.0).contains(&significance_level) {
+            #[cfg(feature = "logging")]
+            slog::error!(
+                self.logger,
+                "Invalid significance level: {}. Must be between 0 and 1",
+                significance_level
+            );
+            return;
+        }
+
+        match self
+            .conformal_mode_predictor
+            .calibrate(&self.calibration_data, significance_level)
+        {
+            Ok((l_hat, emp_risk)) => {
+                self.calibrated = true;
+                #[cfg(feature = "logging")]
+                slog::info!(
+                    self.logger,
+                    "Node {}: Calibration successful on calibration set of size {}! Lambda: {}. Empirical risk on calibration data: {}.",
+                    self.pid,
+                    self.calibration_data.len(),
+                    l_hat,
+                    emp_risk
+                );
+            }
+            Err(e) => {
+                #[cfg(feature = "logging")]
+                slog::warn!(self.logger, "Node {}: Calibration failed: {}", self.pid, e);
+            }
+        }
     }
 
     /// Handle an incoming message.

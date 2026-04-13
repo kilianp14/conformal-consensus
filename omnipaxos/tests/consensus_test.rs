@@ -25,7 +25,12 @@ fn consensus_test() {
     let mut rng = rand::thread_rng();
 
     // Propose values to random nodes with random intervals
-    for v in &vec_proposals {
+    for (_i, v) in vec_proposals.iter().enumerate() {
+        #[cfg(feature = "adaptive")]
+        if _i as u64 == cfg.num_proposals / 2 {
+            thread::sleep(Duration::from_millis(5000));
+            sys.calibrate_all_nodes(0.1);
+        }
         // Pick a random node (1 to num_nodes)
         let random_pid = rng.gen_range(1..=cfg.num_nodes as NodeId);
         let node = sys.nodes.get(&random_pid).expect("Node should exist");
