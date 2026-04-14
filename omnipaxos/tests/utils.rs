@@ -332,6 +332,16 @@ impl TestSystem {
         }
     }
 
+    /// Triggers calibration on all nodes in the cluster with the given significance level.
+    #[cfg(feature = "adaptive")]
+    pub fn print_fast_path_success_rates(&self) {
+        for node in &self.nodes {
+            node.1.on_definition(|comp| {
+                comp.paxos.get_fast_path_success_rate();
+            });
+        }
+    }
+
     fn set_executor_for_threads(threads: usize, conf: &mut KompactConfig) {
         if threads <= 32 {
             conf.executor(crossbeam_workstealing_pool::small_pool)
@@ -354,8 +364,7 @@ pub mod omnireplica {
     #[derive(ComponentDefinition)]
     pub struct OmniPaxosComponent {
         ctx: ComponentContext<Self>,
-        #[allow(dead_code)]
-        pid: NodeId,
+        pub pid: NodeId,
         pub peers: HashMap<NodeId, ActorRef<Message<Value>>>,
         pub peer_disconnections: HashSet<NodeId>,
         paxos_timer: Option<ScheduledTimer>,

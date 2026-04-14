@@ -214,6 +214,7 @@ where
             {
                 debug!(self.logger, "Pid {}. Incoming Decide: {:?}", self.pid, dec);
             }
+            // Check if this node proposed something for this slot
             if let Some(own_proposed_entry_at_slot) = self.pending_proposals.remove(&dec.slot_idx) {
                 #[cfg(not(feature = "adaptive"))]
                 let own_prop_entry = own_proposed_entry_at_slot;
@@ -221,12 +222,18 @@ where
                 let (own_prop_entry, features) = own_proposed_entry_at_slot;
                 #[cfg(feature = "adaptive")]
                 {
-                    if let Some(features) = features {
-                        if !self.calibrated
-                            && dec.accept_status == AcceptStatus::FpFastAccepted
+                    // Update fast-path success meta-data
+                    if self.calibrated {
+                        self.calibrated_fast_path_tries += 1;
+                        if dec.accept_status == AcceptStatus::FpFastAccepted
                             && own_prop_entry == dec.entry
                         {
-                            // Fast path succeeded
+                            self.calibrated_fast_path_successes += 1
+                        }
+                    } else if let Some(features) = features {
+                        if dec.accept_status == AcceptStatus::FpFastAccepted
+                            && own_prop_entry == dec.entry
+                        {
                             self.calibration_data.push((features, Label::Success));
                         } else {
                             self.calibration_data.push((features, Label::NoSuccess));
@@ -235,7 +242,7 @@ where
                 }
 
                 if own_prop_entry != dec.entry {
-                    // The slot was taken by another entry; retry our proposal
+                    // The slot was taken by another entry; retry proposal
                     self.append(own_prop_entry);
                 }
             }

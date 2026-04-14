@@ -44,10 +44,10 @@ fn consensus_test() {
         futures.push(kfuture);
 
         // Random delay to simulate parallel vs sequential behavior
-        let delay = rng.gen_range(0..5);
-        if delay > 0 {
-            thread::sleep(Duration::from_millis(delay));
-        }
+        // let delay = rng.gen_range(0..10);
+        // if delay > 0 {
+        //     thread::sleep(Duration::from_millis(delay));
+        // }
     }
 
     // Wait for all proposals to be decided
@@ -68,6 +68,8 @@ fn consensus_test() {
     check_quorum(&logs, quorum_size, &vec_proposals);
     check_validity(&logs, &vec_proposals);
     check_consistent_log_prefixes(&logs);
+    #[cfg(feature = "adaptive")]
+    sys.print_fast_path_success_rates();
 
     // Graceful Shutdown
     let kompact_system = std::mem::take(&mut sys.kompact_system).expect("No KompactSystem");

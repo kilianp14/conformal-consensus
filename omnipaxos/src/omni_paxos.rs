@@ -263,6 +263,12 @@ where
         self.seq_paxos.calibrate(significance_level);
     }
 
+    #[cfg(feature = "adaptive")]
+    /// Get fast path success rate (only possible after successful calibration)
+    pub fn get_fast_path_success_rate(&self) -> Option<f64> {
+        self.seq_paxos.get_fast_path_success_rate()
+    }
+
     /// Handles re-establishing a connection to a previously disconnected peer.
     /// This should only be called if the underlying network implementation indicates that a connection has been re-established.
     pub fn reconnected(&mut self, pid: NodeId) {

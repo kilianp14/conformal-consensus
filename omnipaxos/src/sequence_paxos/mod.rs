@@ -105,6 +105,10 @@ where
     calibration_data: Vec<(Features, Label)>,
     #[cfg(feature = "adaptive")]
     calibrated: bool,
+    #[cfg(feature = "adaptive")]
+    calibrated_fast_path_tries: u64,
+    #[cfg(feature = "adaptive")]
+    calibrated_fast_path_successes: u64,
     #[cfg(feature = "logging")]
     logger: Logger,
 }
@@ -156,6 +160,10 @@ where
             calibration_data: Vec::with_capacity(10000),
             #[cfg(feature = "adaptive")]
             calibrated: false,
+            #[cfg(feature = "adaptive")]
+            calibrated_fast_path_tries: 0,
+            #[cfg(feature = "adaptive")]
+            calibrated_fast_path_successes: 0,
             #[cfg(feature = "logging")]
             logger,
         };
@@ -286,6 +294,25 @@ where
     #[cfg(feature = "adaptive")]
     pub(crate) fn set_fast_quorum_latency(&mut self, latency: Option<f64>) {
         self.fast_quorum_latency_in_s = latency;
+    }
+
+    #[cfg(feature = "adaptive")]
+    pub(crate) fn get_fast_path_success_rate(&self) -> Option<f64> {
+        if self.calibrated_fast_path_tries != 0 {
+            let success_rate =
+                self.calibrated_fast_path_successes as f64 / self.calibrated_fast_path_tries as f64;
+            #[cfg(feature = "logging")]
+            slog::info!(
+                self.logger,
+                "Node {} has a fast-path success_rate of {} from {} attempts",
+                self.pid,
+                success_rate,
+                self.calibrated_fast_path_tries
+            );
+            Some(success_rate)
+        } else {
+            None
+        }
     }
 
     /// Calibrate
