@@ -337,7 +337,7 @@ where
             .conformal_mode_predictor
             .calibrate(&self.calibration_data, significance_level)
         {
-            Ok((l_hat, emp_risk)) => {
+            Ok((_l_hat, _emp_risk)) => {
                 self.calibrated = true;
                 #[cfg(feature = "logging")]
                 slog::info!(
@@ -345,13 +345,13 @@ where
                     "Node {}: Calibration successful on calibration set of size {}! Lambda: {}. Empirical risk on calibration data: {}.",
                     self.pid,
                     self.calibration_data.len(),
-                    l_hat,
-                    emp_risk
+                    _l_hat,
+                    _emp_risk
                 );
             }
-            Err(e) => {
+            Err(_e) => {
                 #[cfg(feature = "logging")]
-                slog::warn!(self.logger, "Node {}: Calibration failed: {}", self.pid, e);
+                slog::warn!(self.logger, "Node {}: Calibration failed: {}", self.pid, _e);
             }
         }
     }

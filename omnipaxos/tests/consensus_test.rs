@@ -43,8 +43,8 @@ fn consensus_test() {
         });
         futures.push(kfuture);
 
-        // Random delay to simulate parallel vs sequential behavior
-        // let delay = rng.gen_range(0..10);
+        // // Random delay to simulate parallel vs sequential behavior
+        // let delay = rng.gen_range(0..15);
         // if delay > 0 {
         //     thread::sleep(Duration::from_millis(delay));
         // }

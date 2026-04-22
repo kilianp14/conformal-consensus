@@ -1,6 +1,5 @@
-#[cfg(feature = "logging")]
 use crate::utils::Mode;
-#[cfg(feature = "logging")]
+
 #[derive(Clone, Debug)]
 pub(crate) struct Features {
     pub(crate) fast_quorum_latency_in_s: f64,

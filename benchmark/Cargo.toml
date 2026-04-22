@@ -1,0 +1,23 @@
+[package]
+name = "benchmark"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+config = "0.15.22"
+omnipaxos = { path = "../omnipaxos", features = ["serde", "toml_config"] }
+serde = { version = "1.0.228", features = ["derive"] }
+tokio = { version = "1.52.1", features = ["full"] }
+tokio-serde = { version = "0.9.0", features = ["bincode"] }
+tokio-util = { version = "0.7.18", features = ["codec"] }
+
+[features]
+adaptive = ["omnipaxos/adaptive"]
+
+[[bin]]
+name = "client"
+path = "src/client/main.rs"
+
+[[bin]]
+name = "server"
+path = "src/server/main.rs"
