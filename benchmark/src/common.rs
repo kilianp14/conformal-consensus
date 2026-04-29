@@ -5,7 +5,7 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio_serde::{Framed, formats::Bincode};
 use tokio_util::codec::{Framed as CodecFramed, FramedRead, FramedWrite, LengthDelimitedCodec};
 
-pub type CommandId = u64;
+pub type CommandId = usize;
 pub type ClientId = u64;
 pub type NodeId = omnipaxos::utils::NodeId;
 pub type Timestamp = i64;

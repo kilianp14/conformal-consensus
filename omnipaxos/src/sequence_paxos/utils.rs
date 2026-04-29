@@ -363,7 +363,7 @@ where
             .map(|(id, counts)| ((*id).clone(), *counts));
 
         // Check if we can make a decision
-        if let Some((entry_id, (op, fast, slow, total_for_entry))) = winner {
+        if let Some((entry_id, (op, fast, slow, _))) = winner {
             if self.quorum.is_majority_quorum(op) {
                 return SlotResult::Decided(entry_id, AcceptStatus::OpAccepted);
             }
@@ -374,17 +374,18 @@ where
                 return SlotResult::Decided(entry_id, AcceptStatus::FpSlowAccepted);
             }
 
-            // Calculate if a fast path is still possible
+            // Calculate if a decision is still possible
             let remaining_votes = self.quorum.total_nodes - total_votes_in_slot;
-            let max_possible_votes = total_for_entry + remaining_votes;
 
-            if self.quorum.is_fast_quorum(max_possible_votes) {
-                // It is still possible to reach a fast quorum if the
+            if self.quorum.is_fast_quorum(remaining_votes + fast)
+                || self.quorum.is_majority_quorum(remaining_votes + op)
+            {
+                // It is still possible to reach a decision if the
                 // remaining nodes vote for this entry_id.
                 SlotResult::Pending
             } else {
                 // Even with all remaining votes, the winner cannot reach
-                // the fast quorum. Transition to slow path.
+                // a required quorum. Transition to slow path.
                 SlotResult::SlowPath(entry_id)
             }
         } else {
