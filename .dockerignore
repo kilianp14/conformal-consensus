@@ -1,0 +1,9 @@
+# Exclude everything
+*
+
+# Whitelist Rust code
+!Cargo.toml
+!Cargo.lock
+!benchmark/
+!omnipaxos/
+!omnipaxos_macros/
