@@ -45,8 +45,7 @@ impl ConformalModePredictor {
             return Err("Calibration data empty. No calibration performed".to_string());
         }
         let lambda_threshold = |lambda: f64| {
-            self.empirical_risk(calibration_set, lambda)
-                - ((n_calibration + 1.0) / n_calibration * alpha - 1.0 / n_calibration)
+            self.empirical_risk(calibration_set, lambda) - alpha + (1.0 - alpha) / n_calibration
         };
         match find_root(lambda_threshold, 0.0, 1.0) {
             Some(l) => {

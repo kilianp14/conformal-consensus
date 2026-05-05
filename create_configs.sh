@@ -1,11 +1,23 @@
 #!/bin/bash
 
 if [ -z "$1" ]; then
-  echo "Usage: $0 <number_of_nodes>"
+  echo "Usage: $0 <number_of_nodes> <mode: OmniPaxos|FastPaxos>"
+  exit 1
+fi
+
+if [ -z "$2" ]; then
+  echo "Usage: $0 <number_of_nodes> <mode: OmniPaxos|FastPaxos>"
   exit 1
 fi
 
 NUM_NODES=$1
+MODE=$2
+
+if [ "$MODE" != "FastPaxos" ] && [ "$MODE" != "OmniPaxos" ]; then
+  echo "Error: mode must be either 'FastPaxos' or 'OmniPaxos'"
+  exit 1
+fi
+
 CONFIG_DIR="configs"
 LOG_DIR="logs"
 
@@ -43,6 +55,7 @@ server_id = $i
 listen_address = "127.0.0.1"
 listen_port = $SERVER_PORT
 num_clients = 1
+mode = "$MODE"
 output_filepath = "$LOG_DIR/server_$i.log"
 EOF
 
@@ -53,8 +66,8 @@ summary_filepath = "$LOG_DIR/client_summary_$i.log"
 output_filepath = "$LOG_DIR/client_output_$i.log"
 
 [[requests]]
-duration_sec = 60
-requests_per_sec = 200
+duration_sec = 5
+requests_per_sec = 10
 read_ratio = 0.8
 EOF
 done

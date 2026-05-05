@@ -170,7 +170,10 @@ where
         paxos.internal_storage.set_promise(leader);
         #[cfg(feature = "logging")]
         {
-            info!(paxos.logger, "Paxos component pid: {} created!", pid,);
+            info!(
+                paxos.logger,
+                "Paxos component pid: {} created! Initial Mode: {:?}", pid, config.mode
+            );
         }
         paxos
     }

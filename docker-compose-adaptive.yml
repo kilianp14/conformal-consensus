@@ -1,0 +1,73 @@
+x-common-server-variables: &common-server-variables
+  RUST_LOG: "debug"
+  SERVER_CONFIG_FILE: "/app/server-config.toml"
+  CLUSTER_CONFIG_FILE: "/app/cluster-config.toml"
+  OMNIPAXOS_NODE_ADDRS: "s1:8000,s2:8000,s3:8000"
+  OMNIPAXOS_LISTEN_ADDRESS: "0.0.0.0"
+  OMNIPAXOS_LISTEN_PORT: 8000
+
+services:
+  # --- SERVERS ---
+  s1:
+    image: omnipaxos-server
+    build: { context: ./, dockerfile: server_adaptive.dockerfile }
+    container_name: s1
+    environment: *common-server-variables
+    volumes:
+      - ./configs/server_1.toml:/app/server-config.toml
+      - ./configs/cluster.toml:/app/cluster-config.toml
+      - ./logs/:/app/logs/
+
+  s2: &server-base
+    image: omnipaxos-server
+    container_name: s2
+    environment: *common-server-variables
+    volumes:
+      - ./configs/server_2.toml:/app/server-config.toml
+      - ./configs/cluster.toml:/app/cluster-config.toml
+      - ./logs/:/app/logs/
+
+  s3:
+    <<: *server-base
+    container_name: s3
+    volumes:
+      - ./configs/server_3.toml:/app/server-config.toml
+      - ./configs/cluster.toml:/app/cluster-config.toml
+      - ./logs/:/app/logs/
+
+
+  # --- CLIENTS ---
+  c1:
+    image: omnipaxos-client
+    build: { context: ./, dockerfile: client.dockerfile }
+    container_name: c1
+    environment:
+      RUST_LOG: "debug"
+      CONFIG_FILE: "/app/client-config.toml"
+      OMNIPAXOS_SERVER_ADDRESS: "s1:8000"
+    volumes:
+      - ./configs/client_1.toml:/app/client-config.toml
+      - ./logs/:/app/logs/
+
+  c2: &client-base
+    image: omnipaxos-client
+    container_name: c2
+    environment:
+      RUST_LOG: "debug"
+      CONFIG_FILE: "/app/client-config.toml"
+      OMNIPAXOS_SERVER_ADDRESS: "s2:8000"
+    volumes:
+      - ./configs/client_2.toml:/app/client-config.toml
+      - ./logs/:/app/logs/
+
+  c3:
+    <<: *client-base
+    container_name: c3
+    environment:
+      RUST_LOG: "debug"
+      CONFIG_FILE: "/app/client-config.toml"
+      OMNIPAXOS_SERVER_ADDRESS: "s3:8000"
+    volumes:
+      - ./configs/client_3.toml:/app/client-config.toml
+      - ./logs/:/app/logs/
+

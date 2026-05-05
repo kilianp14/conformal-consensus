@@ -3,7 +3,8 @@ use std::env;
 use benchmark::common::NodeId;
 use config::{Config, ConfigError, Environment, File};
 use omnipaxos::{
-    ClusterConfig as OmnipaxosClusterConfig, OmniPaxosConfig, ServerConfig as OmnipaxosServerConfig,
+    ClusterConfig as OmnipaxosClusterConfig, OmniPaxosConfig,
+    ServerConfig as OmnipaxosServerConfig, utils::Mode,
 };
 use serde::{Deserialize, Serialize};
 
@@ -16,12 +17,12 @@ pub struct ClusterConfig {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LocalConfig {
-    pub location: Option<String>,
     pub server_id: NodeId,
     pub listen_address: String,
     pub listen_port: u16,
     pub num_clients: usize,
     pub output_filepath: String,
+    pub mode: Mode,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -39,6 +40,7 @@ impl From<OmniPaxosKVConfig> for OmniPaxosConfig {
         };
         let server_config = OmnipaxosServerConfig {
             pid: config.local.server_id,
+            mode: config.local.mode,
             ..Default::default()
         };
         Self {

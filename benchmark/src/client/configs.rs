@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ClientConfig {
-    pub location: String,
     pub server_id: NodeId,
     pub server_address: String,
     pub requests: Vec<RequestInterval>,

@@ -1,7 +1,7 @@
 #![cfg(feature = "toml_config")]
 pub mod utils;
 
-use omnipaxos::OmniPaxosConfig;
+use omnipaxos::{utils::Mode, OmniPaxosConfig};
 use serial_test::serial;
 use utils::Value;
 
@@ -9,7 +9,6 @@ use utils::Value;
 /// from a TOML file.
 #[test]
 #[serial]
-#[ignore]
 fn config_all_fields_test() {
     let file_path = "tests/config/node1.toml";
     match OmniPaxosConfig::with_toml(file_path) {
@@ -26,6 +25,7 @@ fn config_all_fields_test() {
                 Some("logs/paxos_1.log".to_string())
             );
             assert_eq!(config.server_config.leader_priority, 2);
+            assert_eq!(config.server_config.mode, Mode::FastPaxos);
 
             // Make sure we pass asserts in build
             config.build::<Value>().unwrap();
