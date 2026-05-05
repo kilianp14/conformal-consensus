@@ -1,10 +1,11 @@
 use benchmark::common::{
     ClientMessage, FromServerConnection, NodeId, RegistrationMessage, ServerMessage,
     ToServerConnection, frame_clients_connection, frame_registration_connection,
+    resolve_addr_with_retry,
 };
 use futures::{SinkExt, StreamExt};
 use log::{error, info, warn};
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::sync::mpsc::{self, channel};
 use tokio::task::JoinHandle;
@@ -40,11 +41,7 @@ impl Network {
         info!("Establishing server connections");
         let mut connection_tasks = Vec::with_capacity(servers.len());
         for (server_id, server_addr_str) in &servers {
-            let server_address = server_addr_str
-                .to_socket_addrs()
-                .expect("Unable to resolve server IP")
-                .next()
-                .unwrap();
+            let server_address = resolve_addr_with_retry(server_addr_str, 10);
             let task = tokio::spawn(Self::get_server_connection(*server_id, server_address));
             connection_tasks.push(task);
         }

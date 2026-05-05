@@ -1,10 +1,11 @@
 use benchmark::common::{
     ClientId, ClientMessage, ClusterMessage, NodeId, RegistrationMessage, ServerMessage,
     frame_cluster_connection, frame_registration_connection, frame_servers_connection,
+    resolve_addr_with_retry,
 };
 use futures::{SinkExt, StreamExt};
 use log::{error, info, warn};
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{collections::HashMap, str::FromStr};
@@ -34,17 +35,17 @@ fn get_addrs(config: OmniPaxosKVConfig) -> (SocketAddr, Vec<SocketAddr>) {
         "{}:{}",
         config.local.listen_address, config.local.listen_port
     );
+
     let listen_address = SocketAddr::from_str(&listen_address_str)
         .unwrap_or_else(|_| panic!("{listen_address_str} is an invalid listen address"));
+
     let node_addresses: Vec<SocketAddr> = config
         .cluster
         .node_addrs
         .into_iter()
-        .map(|addr_str| match addr_str.to_socket_addrs() {
-            Ok(mut addrs) => addrs.next().unwrap(),
-            Err(e) => panic!("Address {addr_str} is invalid: {e}"),
-        })
+        .map(|addr_str| resolve_addr_with_retry(&addr_str, 10))
         .collect();
+
     (listen_address, node_addresses)
 }
 
@@ -268,16 +269,12 @@ impl Network {
     }
 
     // Removes all client and peer connections and ends their corresponding tasks.
-    #[allow(dead_code)]
     pub fn shutdown(&mut self) {
         for (_, client_connection) in self.client_connections.drain() {
             client_connection.close();
         }
         for connection in self.peer_connections.drain(..).flatten() {
             connection.close();
-        }
-        for _ in 0..self.peers.len() {
-            self.peer_connections.push(None);
         }
     }
 

@@ -1,3 +1,7 @@
+use std::net::{SocketAddr, ToSocketAddrs};
+use std::thread;
+use std::time::Duration;
+
 use omnipaxos::{macros::Entry, messages::Message as OmniPaxosMessage};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
@@ -144,4 +148,23 @@ pub fn frame_servers_connection(stream: TcpStream) -> (FromClientConnection, ToC
         FromClientConnection::new(stream, Bincode::default()),
         ToClientConnection::new(sink, Bincode::default()),
     )
+}
+
+pub fn resolve_addr_with_retry(addr: &str, retries: usize) -> SocketAddr {
+    for attempt in 0..retries {
+        match addr.to_socket_addrs() {
+            Ok(mut addrs) => {
+                if let Some(a) = addrs.next() {
+                    return a;
+                }
+            }
+            Err(e) => {
+                if attempt == retries - 1 {
+                    panic!("Address {addr} is invalid after {retries} attempts: {e}");
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(200 * (attempt as u64 + 1)));
+    }
+    unreachable!()
 }

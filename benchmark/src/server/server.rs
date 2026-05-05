@@ -11,6 +11,7 @@ use omnipaxos::{
     utils::{LogEntry, NodeId},
 };
 use std::{fs::File, io::Write, time::Duration};
+use tokio::signal::unix::{SignalKind, signal};
 
 const NETWORK_BATCH_SIZE: usize = 100;
 const LEADER_WAIT: Duration = Duration::from_secs(1);
@@ -58,6 +59,10 @@ impl OmniPaxosServer {
         let mut election_interval = tokio::time::interval(ELECTION_TIMEOUT);
         loop {
             tokio::select! {
+                _ = shutdown_signal() => {
+                    self.network.shutdown();
+                    break;
+                }
                 _ = election_interval.tick() => {
                     self.omnipaxos.tick();
                     self.send_outgoing_msgs();
@@ -214,5 +219,19 @@ impl OmniPaxosServer {
         output_file.write_all(config_json.as_bytes())?;
         output_file.flush()?;
         Ok(())
+    }
+}
+
+async fn shutdown_signal() {
+    let mut sigterm = signal(SignalKind::terminate()).expect("Failed to install SIGTERM handler");
+    let mut sigint = signal(SignalKind::interrupt()).expect("Failed to install SIGINT handler");
+
+    tokio::select! {
+        _ = sigint.recv() => {
+            info!("SIGINT received");
+        }
+        _ = sigterm.recv() => {
+            info!("SIGTERM received");
+        }
     }
 }
