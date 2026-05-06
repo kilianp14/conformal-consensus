@@ -57,13 +57,29 @@ where
     /// Truncate the log at index and append the new suffix, returns new accepted index (log length)
     pub(crate) fn append_suffix(&mut self, suffix: Vec<LogEntry<T>>, from_idx: usize) {
         self.log.truncate(from_idx);
+        self.empty_slots.retain(|&idx| idx < from_idx);
+
+        // Scan the suffix for LogEntry::Empty and track those indices
+        for (i, entry) in suffix.iter().enumerate() {
+            if let LogEntry::Empty = entry {
+                self.empty_slots.insert(from_idx + i);
+            }
+        }
         self.log.extend(suffix);
     }
 
     /// Inserts a value at a specific index, empty slots in between are filled with None
     pub(crate) fn insert_at_index(&mut self, index: SlotId, value: LogEntry<T>) {
         if index < self.decided_idx {
-            panic!("Cannot overwrite decided entry at index {}", index);
+            panic!(
+                "Cannot overwrite decided entry at index {}: old entry: {:?}, new entry: {:?}",
+                index, self.log[index], value
+            );
+        }
+        if value == LogEntry::Empty {
+            self.empty_slots.insert(index);
+        } else {
+            self.empty_slots.remove(&index);
         }
         if index < self.log.len() {
             self.log[index] = value;

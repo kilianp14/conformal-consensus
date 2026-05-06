@@ -1,10 +1,11 @@
+use std::time::Duration;
+
 use crate::{configs::ClientConfig, data_collection::ClientData, network::Network};
 use benchmark::common::{ClientId, KVCommand, NodeId, ServerMessage};
 use chrono::Utc;
 use log::{debug, info, warn};
 use rand::RngExt;
-use std::time::Duration;
-use tokio::time::interval;
+use tokio::time::{Instant, sleep_until};
 
 const NETWORK_BATCH_SIZE: usize = 100;
 
@@ -14,7 +15,6 @@ pub struct Client {
     client_data: ClientData,
     config: ClientConfig,
     active_server: NodeId,
-    final_request_count: Option<usize>,
     next_request_id: usize,
 }
 
@@ -31,7 +31,6 @@ impl Client {
             client_data: ClientData::new(),
             active_server: config.server_id,
             config,
-            final_request_count: None,
             next_request_id: 0,
         }
     }
@@ -46,52 +45,37 @@ impl Client {
             _ => panic!("Error waiting for start signal"),
         }
 
-        // Early end
-        let intervals = self.config.requests.clone();
-        if intervals.is_empty() {
-            self.save_results().expect("Failed to save results");
-            return;
-        }
-
-        // Initialize intervals
+        let start_instant = Instant::now();
+        let max_duration = Duration::from_secs(self.config.max_duration_sec);
+        let mut next_request_at = Instant::now()
+            + Duration::from_secs_f64(
+                1.0 / self.config.load_pattern.get_rps(Duration::from_secs(0)),
+            );
         let mut rng = rand::rng();
-        let mut intervals = intervals.iter();
-        let first_interval = intervals.next().unwrap();
-        let mut read_ratio = first_interval.get_read_ratio();
-        let mut request_interval = interval(first_interval.get_request_delay());
-        let mut next_interval = interval(first_interval.get_interval_duration());
-        let _ = next_interval.tick().await;
 
-        // Main event loop
-        info!("{}: Starting requests", self.id);
+        info!(
+            "{}: Starting requests with load pattern: {:?}",
+            self.id, self.config.load_pattern
+        );
         loop {
+            let now = Instant::now();
+            let elapsed = now.duration_since(start_instant);
+
+            if elapsed >= max_duration {
+                info!(
+                    "{}: Max duration reached, stopping request generation",
+                    self.id
+                );
+                break;
+            }
+
             tokio::select! {
                 biased;
-                Some(msg) = self.network.server_messages.recv() => {
-                    self.handle_server_message(msg);
-                    if self.run_finished() {
-                        break;
-                    }
-                }
-                _ = request_interval.tick(), if self.final_request_count.is_none() => {
-                    let is_write = rng.random_bool(1.0 - read_ratio);
+                Some(msg) = self.network.server_messages.recv() => self.handle_server_message(msg),
+                _ = sleep_until(next_request_at) => {
+                    let is_write = rng.random_bool(1.0 - self.config.read_ratio);
                     self.send_request(is_write).await;
-                },
-                _ = next_interval.tick() => {
-                    match intervals.next() {
-                        Some(new_interval) => {
-                            read_ratio = new_interval.read_ratio;
-                            next_interval = interval(new_interval.get_interval_duration());
-                            next_interval.tick().await;
-                            request_interval = interval(new_interval.get_request_delay());
-                        },
-                        None => {
-                            self.final_request_count = Some(self.client_data.request_count());
-                            if self.run_finished() {
-                                break;
-                            }
-                        },
-                    }
+                    next_request_at = Instant::now() + Duration::from_secs_f64(1.0 / self.config.load_pattern.get_rps(elapsed));
                 },
             }
         }
@@ -129,22 +113,9 @@ impl Client {
         self.next_request_id += 1;
     }
 
-    fn run_finished(&self) -> bool {
-        if let Some(count) = self.final_request_count
-            && self.client_data.request_count() >= count
-        {
-            true
-        } else {
-            false
-        }
-    }
-
     // Wait until the scheduled start time to synchronize client starts.
     // If start time has already passed, start immediately.
     async fn wait_until_sync_time(config: &mut ClientConfig, scheduled_start_utc_ms: i64) {
-        // // Desync the clients a bit
-        // let mut rng = rand::thread_rng();
-        // let scheduled_start_utc_ms = scheduled_start_utc_ms + rng.gen_range(1..100);
         let now = Utc::now();
         let milliseconds_until_sync = scheduled_start_utc_ms - now.timestamp_millis();
         config.sync_time = Some(milliseconds_until_sync);

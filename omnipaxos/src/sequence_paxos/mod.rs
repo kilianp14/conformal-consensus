@@ -305,7 +305,7 @@ where
             let success_rate =
                 self.calibrated_fast_path_successes as f64 / self.calibrated_fast_path_tries as f64;
             #[cfg(feature = "logging")]
-            slog::info!(
+            info!(
                 self.logger,
                 "Node {} has a fast-path success_rate of {} from {} attempts",
                 self.pid,

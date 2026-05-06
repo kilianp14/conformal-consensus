@@ -46,10 +46,6 @@ impl ClientData {
         self.response_count
     }
 
-    pub fn request_count(&self) -> usize {
-        self.request_data.len()
-    }
-
     pub fn save_summary(&self, config: ClientConfig) -> Result<(), std::io::Error> {
         let config_json = serde_json::to_string_pretty(&config)?;
         let mut summary_file = File::create(config.summary_filepath)?;

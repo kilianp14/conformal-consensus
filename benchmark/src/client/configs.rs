@@ -8,10 +8,50 @@ use serde::{Deserialize, Serialize};
 pub struct ClientConfig {
     pub server_id: NodeId,
     pub server_address: String,
-    pub requests: Vec<RequestInterval>,
+    pub load_pattern: LoadPattern,
+    pub read_ratio: f64,
+    pub max_duration_sec: u64,
     pub sync_time: Option<Timestamp>,
     pub summary_filepath: String,
     pub output_filepath: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "type")]
+pub enum LoadPattern {
+    /// A load pattern that oscillates between a high and low RPS.
+    Cyclic {
+        highest_rps: u64, // Peak requests per second
+        lowest_rps: u64,  // Trough requests per second
+        period_sec: u64,  // Duration of one full cycle
+        offset_sec: u64,  // Time offset for the start of the pattern
+    },
+}
+
+impl LoadPattern {
+    /// Calculates the target RPS at a given point in time.
+    pub fn get_rps(&self, elapsed: Duration) -> f64 {
+        match self {
+            LoadPattern::Cyclic {
+                highest_rps,
+                lowest_rps,
+                period_sec,
+                offset_sec,
+            } => {
+                let h = *highest_rps as f64;
+                let l = *lowest_rps as f64;
+                let period = *period_sec as f64;
+                let offset = *offset_sec as f64;
+                let t = elapsed.as_secs_f64();
+
+                let avg = (h + l) / 2.0;
+                let amp = (h - l) / 2.0;
+
+                // RPS(t) = avg + amplitude * sin(2*PI * (t + offset) / period)
+                avg + amp * (2.0 * std::f64::consts::PI * (t + offset) / period).sin()
+            }
+        }
+    }
 }
 
 impl ClientConfig {
@@ -22,35 +62,8 @@ impl ClientConfig {
         };
         let config = Config::builder()
             .add_source(File::with_name(&config_file))
-            // Add-in/overwrite settings with environment variables (with a prefix of OMNIPAXOS)
             .add_source(Environment::with_prefix("OMNIPAXOS").try_parsing(true))
             .build()?;
         config.try_deserialize()
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
-pub struct RequestInterval {
-    pub duration_sec: u64,
-    pub requests_per_sec: u64,
-    pub read_ratio: f64,
-}
-
-impl RequestInterval {
-    pub fn get_read_ratio(&self) -> f64 {
-        self.read_ratio
-    }
-
-    pub fn get_interval_duration(&self) -> Duration {
-        Duration::from_secs(self.duration_sec)
-    }
-
-    pub fn get_request_delay(&self) -> Duration {
-        if self.requests_per_sec == 0 {
-            return Duration::from_secs(999999);
-        }
-        let delay_ms = 1000 / self.requests_per_sec;
-        assert!(delay_ms != 0);
-        Duration::from_millis(delay_ms)
     }
 }

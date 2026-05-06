@@ -57,6 +57,8 @@ listen_port = $SERVER_PORT
 num_clients = 1
 mode = "$MODE"
 output_filepath = "$LOG_DIR/server_$i.log"
+significance_level = 0.3
+calibration_delay_ms = 40000
 EOF
 
   cat <<EOF >"$CONFIG_DIR/client_$i.toml"
@@ -64,11 +66,15 @@ server_id = $i
 server_address = "127.0.0.1:$SERVER_PORT"
 summary_filepath = "$LOG_DIR/client_summary_$i.log"
 output_filepath = "$LOG_DIR/client_output_$i.log"
-
-[[requests]]
-duration_sec = 5
-requests_per_sec = 10
+max_duration_sec = 120
 read_ratio = 0.8
+
+[load_pattern]
+type = "Cyclic"
+highest_rps = 50
+lowest_rps = 5
+period_sec = 20
+offset_sec = 0
 EOF
 done
 
