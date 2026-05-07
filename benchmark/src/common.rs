@@ -31,7 +31,7 @@ pub enum KVCommand {
 
 impl PartialEq for Command {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
+        self.id == other.id && self.coordinator_id == other.coordinator_id
     }
 }
 impl Eq for Command {}
