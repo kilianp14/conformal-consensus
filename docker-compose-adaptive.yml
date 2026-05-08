@@ -9,7 +9,7 @@ x-common-server-variables: &common-server-variables
 services:
   # --- SERVERS ---
   s1:
-    image: omnipaxos-server
+    image: omnipaxos-server-adaptive
     build: { context: ./, dockerfile: server_adaptive.dockerfile }
     container_name: s1
     environment: *common-server-variables
@@ -19,7 +19,7 @@ services:
       - ./logs/:/app/logs/
 
   s2: &server-base
-    image: omnipaxos-server
+    image: omnipaxos-server-adaptive
     container_name: s2
     environment: *common-server-variables
     volumes:
