@@ -5,7 +5,7 @@ use benchmark::common::{ClientId, KVCommand, NodeId, ServerMessage};
 use chrono::Utc;
 use log::{debug, info, warn};
 use rand::RngExt;
-use tokio::time::{Instant, sleep_until};
+use tokio::time::{Instant, sleep, sleep_until};
 
 const NETWORK_BATCH_SIZE: usize = 100;
 
@@ -87,6 +87,7 @@ impl Client {
         );
         self.network.shutdown();
         self.save_results().expect("Failed to save results");
+        sleep(Duration::from_secs(10)).await;
     }
 
     fn handle_server_message(&mut self, msg: ServerMessage) {
