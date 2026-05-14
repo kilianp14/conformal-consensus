@@ -80,7 +80,7 @@ impl OmniPaxosServer {
                     #[cfg(feature = "adaptive")]
                     if !self.calibrated && self.calibration_time.is_some_and(|t| Utc::now().timestamp_millis() >= t) {
                         info!("{}: Triggering OmniPaxos calibration", self.id);
-                        self.omnipaxos.calibrate(self.config.local.significance_level);
+                        self.omnipaxos.calibrate();
                         self.calibrated = true;
                     }
                     self.send_outgoing_msgs();

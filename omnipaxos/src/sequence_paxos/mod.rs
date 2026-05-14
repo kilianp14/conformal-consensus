@@ -5,12 +5,12 @@ use crate::{
         log::MemoryStorage,
         utils::{LeaderState, SlotId},
     },
-    utils::{AcceptStatus, Ballot, Entry, Mode, NodeId, Phase, Role, SequenceNumber},
+    utils::{AcceptStatus, Ballot, Entry, Mode, NodeId, Phase, Quorum, Role, SequenceNumber},
     OmniPaxosConfig,
 };
 #[cfg(feature = "logging")]
 use slog::{info, Logger};
-use std::{collections::HashMap, fmt::Debug, vec};
+use std::{collections::HashMap, fmt::Debug};
 #[cfg(feature = "adaptive")]
 use std::{
     collections::VecDeque,
@@ -47,6 +47,8 @@ pub(crate) struct SequencePaxosConfig {
     logger_file_path: Option<String>,
     #[cfg(feature = "logging")]
     custom_logger: Option<Logger>,
+    #[cfg(feature = "adaptive")]
+    significance_level: f64,
 }
 
 impl From<OmniPaxosConfig> for SequencePaxosConfig {
@@ -67,6 +69,8 @@ impl From<OmniPaxosConfig> for SequencePaxosConfig {
             logger_file_path: config.server_config.logger_file_path,
             #[cfg(feature = "logging")]
             custom_logger: config.server_config.custom_logger,
+            #[cfg(feature = "adaptive")]
+            significance_level: config.server_config.significance_level,
         }
     }
 }
@@ -83,9 +87,8 @@ where
     mode: Mode,
     peers: Vec<NodeId>, // excluding self pid
     state: (Role, Phase),
-    // Incoming proposals while node is still in prepare phase
-    buffered_proposals: Vec<T>,
     outgoing: Vec<PaxosMessage<T>>,
+    quorum: Quorum,
     leader_state: LeaderState<T>,
     cached_promise_message: Option<Promise<T>>,
     // Keeps track of sequence of accepts from leader where AcceptSync = 1
@@ -93,8 +96,12 @@ where
     // Proposals of this node currently in transit
     #[cfg(not(feature = "adaptive"))]
     pending_proposals: HashMap<SlotId, T>,
+    // Proposals currently in transit with current features
     #[cfg(feature = "adaptive")]
     pending_proposals: HashMap<SlotId, (T, Option<Features>)>,
+    // Proposals currently in transit testing fast-path success with number of test accepted
+    #[cfg(feature = "adaptive")]
+    test_proposals: Vec<(SlotId, T, Features, usize)>,
     #[cfg(feature = "adaptive")]
     conformal_mode_predictor: ConformalModePredictor,
     #[cfg(feature = "adaptive")]
@@ -106,9 +113,9 @@ where
     #[cfg(feature = "adaptive")]
     calibrated: bool,
     #[cfg(feature = "adaptive")]
-    calibrated_fast_path_tries: u64,
+    calibrated_append_attempts: u64,
     #[cfg(feature = "adaptive")]
-    calibrated_fast_path_successes: u64,
+    calibrated_fast_path_errors: u64,
     #[cfg(feature = "logging")]
     logger: Logger,
 }
@@ -123,6 +130,7 @@ where
         let pid = config.pid;
         let peers = config.peers;
         let num_nodes = &peers.len() + 1;
+        let quorum = Quorum::with(num_nodes);
         let leader = Ballot::default();
         let outgoing = Vec::with_capacity(config.buffer_size);
 
@@ -144,14 +152,16 @@ where
             mode: config.mode,
             peers,
             state: (Role::Follower, Phase::None),
-            buffered_proposals: vec![],
             pending_proposals: HashMap::new(),
             outgoing,
-            leader_state: LeaderState::<T>::with(leader, num_nodes),
+            quorum,
+            leader_state: LeaderState::<T>::with(leader, quorum),
             cached_promise_message: None,
             current_seq_num: SequenceNumber::default(),
             #[cfg(feature = "adaptive")]
-            conformal_mode_predictor: ConformalModePredictor::new(),
+            test_proposals: Vec::new(),
+            #[cfg(feature = "adaptive")]
+            conformal_mode_predictor: ConformalModePredictor::new(config.significance_level),
             #[cfg(feature = "adaptive")]
             fast_quorum_latency_in_s: None,
             #[cfg(feature = "adaptive")]
@@ -161,9 +171,9 @@ where
             #[cfg(feature = "adaptive")]
             calibrated: false,
             #[cfg(feature = "adaptive")]
-            calibrated_fast_path_tries: 0,
+            calibrated_append_attempts: 0,
             #[cfg(feature = "adaptive")]
-            calibrated_fast_path_successes: 0,
+            calibrated_fast_path_errors: 0,
             #[cfg(feature = "logging")]
             logger,
         };
@@ -226,23 +236,17 @@ where
                             other_nodes_proposals_per_s,
                         };
                         self.mode = self.conformal_mode_predictor.get_new_mode(&features);
+                        if !self.calibrated {
+                            self.calibrated_append_attempts += 1;
+                        }
                         match self.mode {
-                            Mode::OmniPaxos => self.op_forward_proposal(entry),
+                            Mode::OmniPaxos => self.op_forward_proposal(entry, features),
                             Mode::FastPaxos => self.fp_fast_propose(entry, features),
                         }
                     }
                 }
             }
-            _ => self.buffered_proposals.push(entry),
-        }
-    }
-
-    pub(crate) fn handle_buffered_proposals(&mut self) {
-        if !self.buffered_proposals.is_empty() {
-            let entries = std::mem::take(&mut self.buffered_proposals);
-            for entry in entries {
-                self.append(entry);
-            }
+            _ => {}
         }
     }
 
@@ -264,13 +268,34 @@ where
         self.send_msg_to(pid, PaxosMsg::PrepareReq(prepreq));
     }
 
-    pub(crate) fn op_forward_proposal(&mut self, entry: T) {
+    pub(crate) fn op_forward_proposal(
+        &mut self,
+        entry: T,
+        #[cfg(feature = "adaptive")] features: Features,
+    ) {
         let leader = self.get_current_leader();
         if leader > 0 && self.pid != leader {
+            #[cfg(feature = "adaptive")]
+            {
+                // Send test accept to all peers
+                if !self.calibrated {
+                    let slot_idx = self.internal_storage.get_next_empty_slot();
+                    let acc = Accept {
+                        n: self.internal_storage.get_promise(),
+                        seq_num: SequenceNumber::default(), // not needed for fast path
+                        entry: entry.clone(),
+                        slot_idx,
+                        accept_status: AcceptStatus::TestAccepted,
+                    };
+                    self.send_to_all_peers(PaxosMsg::Accept(acc));
+                    self.test_proposals
+                        .push((slot_idx, entry.clone(), features, 1));
+                }
+            }
             let pf = PaxosMsg::ProposalForward(entry.clone());
             self.send_msg_to(leader, pf);
         } else {
-            self.buffered_proposals.push(entry);
+            self.append(entry);
         }
     }
 
@@ -301,18 +326,18 @@ where
 
     #[cfg(feature = "adaptive")]
     pub(crate) fn get_fast_path_success_rate(&self) -> Option<f64> {
-        if self.calibrated_fast_path_tries != 0 {
-            let success_rate =
-                self.calibrated_fast_path_successes as f64 / self.calibrated_fast_path_tries as f64;
+        if self.calibrated_append_attempts != 0 {
+            let error_rate =
+                self.calibrated_fast_path_errors as f64 / self.calibrated_append_attempts as f64;
             #[cfg(feature = "logging")]
             info!(
                 self.logger,
-                "Node {} has a fast-path success_rate of {} from {} attempts",
+                "Node {} has a fast-path error rate of {} from {} attempts",
                 self.pid,
-                success_rate,
-                self.calibrated_fast_path_tries
+                error_rate,
+                self.calibrated_append_attempts
             );
-            Some(success_rate)
+            Some(error_rate)
         } else {
             None
         }
@@ -320,25 +345,15 @@ where
 
     /// Calibrate
     #[cfg(feature = "adaptive")]
-    pub(crate) fn calibrate(&mut self, significance_level: f64) {
+    pub(crate) fn calibrate(&mut self) {
         if self.calibrated {
             #[cfg(feature = "logging")]
             slog::warn!(self.logger, "Already successfully calibrated; skipping.");
             return;
         }
-        if !(0.0..=1.0).contains(&significance_level) {
-            #[cfg(feature = "logging")]
-            slog::error!(
-                self.logger,
-                "Invalid significance level: {}. Must be between 0 and 1",
-                significance_level
-            );
-            return;
-        }
-
         match self
             .conformal_mode_predictor
-            .calibrate(&self.calibration_data, significance_level)
+            .calibrate(&self.calibration_data)
         {
             Ok((_l_hat, _emp_risk)) => {
                 self.calibrated = true;
@@ -388,6 +403,7 @@ where
                     AcceptStatus::FpFastAccepted => self.handle_fast_accept(acc),
                     AcceptStatus::OpAccepted => self.handle_omnipaxos_accept(acc),
                     AcceptStatus::FpSlowAccepted => self.handle_slow_accept(acc),
+                    AcceptStatus::TestAccepted => self.handle_test_accept(acc, m.from),
                 }
             }
             PaxosMsg::Accepted(accepted) => self.handle_accepted(accepted, m.from),

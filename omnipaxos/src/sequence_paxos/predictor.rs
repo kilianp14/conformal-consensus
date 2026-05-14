@@ -25,27 +25,29 @@ fn model(x: &Features) -> Vec<(Label, f64)> {
 pub(crate) struct ConformalModePredictor {
     model: fn(&Features) -> Vec<(Label, f64)>, // Softmax/ Sigmoid
     lambda_hat: Option<f64>,                   // Bounded between 0 and 1
+    significance_level: f64,
 }
 
 impl ConformalModePredictor {
-    pub fn new() -> Self {
+    pub fn new(significance_level: f64) -> Self {
         Self {
             model,
             lambda_hat: None,
+            significance_level,
         }
     }
 
     pub fn calibrate(
         &mut self,
         calibration_set: &[(Features, Label)],
-        alpha: f64,
     ) -> Result<(f64, f64), String> {
         let n_calibration = calibration_set.len() as f64;
         if n_calibration <= 0.0 {
             return Err("Calibration data empty. No calibration performed".to_string());
         }
         let lambda_threshold = |lambda: f64| {
-            self.empirical_risk(calibration_set, lambda) - alpha + (1.0 - alpha) / n_calibration
+            self.empirical_risk(calibration_set, lambda) - self.significance_level
+                + (1.0 - self.significance_level) / n_calibration
         };
         match find_root(lambda_threshold, 0.0, 1.0) {
             Some(l) => {
@@ -59,16 +61,15 @@ impl ConformalModePredictor {
     }
 
     pub fn get_new_mode(&self, features: &Features) -> Mode {
-        match self.lambda_hat {
-            Some(l_hat) => {
-                let labels = self.get_prediction_set_with_lambda(features, l_hat);
-                if labels.contains(&Label::NoSuccess) {
-                    Mode::OmniPaxos
-                } else {
-                    Mode::FastPaxos
-                }
-            }
-            None => Mode::FastPaxos, // Calibration phase -> always try fast path
+        let lambda = match self.lambda_hat {
+            Some(l_hat) => l_hat,
+            None => self.significance_level, // Calibration phase -> use plain model
+        };
+        let labels = self.get_prediction_set_with_lambda(features, lambda);
+        if labels.contains(&Label::NoSuccess) {
+            Mode::OmniPaxos
+        } else {
+            Mode::FastPaxos
         }
     }
     fn empirical_risk(&self, calibration_set: &[(Features, Label)], lambda: f64) -> f64 {

@@ -78,15 +78,15 @@ impl<T> LeaderState<T>
 where
     T: Entry,
 {
-    pub(crate) fn with(n_leader: Ballot, n_nodes: usize) -> Self {
+    pub(crate) fn with(n_leader: Ballot, quorum: Quorum) -> Self {
         Self {
             n_leader,
-            promises_meta: HashMap::with_capacity(n_nodes),
-            log_syncs: HashMap::with_capacity(n_nodes),
-            follower_seq_nums: HashMap::with_capacity(n_nodes),
+            promises_meta: HashMap::with_capacity(quorum.total_nodes),
+            log_syncs: HashMap::with_capacity(quorum.total_nodes),
+            follower_seq_nums: HashMap::with_capacity(quorum.total_nodes),
             accept_meta: HashMap::new(),
             slot_results: HashMap::new(),
-            quorum: Quorum::with(n_nodes),
+            quorum,
         }
     }
 
@@ -353,6 +353,9 @@ where
                 AcceptStatus::OpAccepted => counts.0 += 1,
                 AcceptStatus::FpFastAccepted => counts.1 += 1,
                 AcceptStatus::FpSlowAccepted => counts.2 += 1,
+                AcceptStatus::TestAccepted => {
+                    panic!("Test Entry should not be in leader decision process")
+                }
             }
         }
 
@@ -432,12 +435,12 @@ mod tests {
         impl Entry for Value {}
 
         let nodes = vec![6, 7, 8];
-        let leader_state = LeaderState::<Value>::with(Ballot::with(1, 1, 8), 3);
+        let leader_state = LeaderState::<Value>::with(Ballot::with(1, 1, 8), Quorum::with(3));
         let prep_peers = leader_state.get_preparable_peers(&nodes);
         assert_eq!(prep_peers, nodes);
 
         let nodes = vec![7, 1, 100, 4, 6];
-        let leader_state = LeaderState::<Value>::with(Ballot::with(1, 1, 100), 3);
+        let leader_state = LeaderState::<Value>::with(Ballot::with(1, 1, 100), Quorum::with(5));
         let prep_peers = leader_state.get_preparable_peers(&nodes);
         assert_eq!(prep_peers, nodes);
     }

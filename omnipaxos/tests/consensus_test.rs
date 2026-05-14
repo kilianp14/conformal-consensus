@@ -4,7 +4,6 @@ use kompact::prelude::{promise, Ask, FutureCollection};
 use omnipaxos::utils::NodeId;
 use rand::Rng;
 use serial_test::serial;
-use std::{thread, time::Duration};
 use utils::{verification::*, TestConfig, TestSystem};
 
 /// Verifies the 3 properties that the Paxos algorithm offers
@@ -28,8 +27,7 @@ fn consensus_test() {
     for (_i, v) in vec_proposals.iter().enumerate() {
         #[cfg(feature = "adaptive")]
         if _i as u64 == cfg.num_proposals / 2 {
-            thread::sleep(Duration::from_millis(5000));
-            sys.calibrate_all_nodes(0.1);
+            sys.calibrate_all_nodes();
         }
         // Pick a random node (1 to num_nodes)
         let random_pid = rng.gen_range(1..=cfg.num_nodes as NodeId);
@@ -42,12 +40,6 @@ fn consensus_test() {
             x.paxos.append(v.clone());
         });
         futures.push(kfuture);
-
-        // // Random delay to simulate parallel vs sequential behavior
-        // let delay = rng.gen_range(0..15);
-        // if delay > 0 {
-        //     thread::sleep(Duration::from_millis(delay));
-        // }
     }
 
     // Wait for all proposals to be decided

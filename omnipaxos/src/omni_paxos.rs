@@ -134,6 +134,9 @@ pub struct ServerConfig {
     #[cfg(feature = "logging")]
     #[cfg_attr(feature = "toml_config", serde(skip_deserializing))]
     pub custom_logger: Option<slog::Logger>,
+    /// significance level used for model calibraion in adaptive algorithm
+    #[cfg(feature = "adaptive")]
+    pub significance_level: f64,
 }
 
 impl ServerConfig {
@@ -148,6 +151,11 @@ impl ServerConfig {
         valid_config!(
             self.resend_message_tick_timeout != 0,
             "Resend message tick timeout must be greater than 0"
+        );
+        #[cfg(feature = "adaptive")]
+        valid_config!(
+            (0.0..=1.0).contains(&self.significance_level),
+            "significance level must be between 0 and 1"
         );
         Ok(())
     }
@@ -166,6 +174,8 @@ impl Default for ServerConfig {
             logger_file_path: None,
             #[cfg(feature = "logging")]
             custom_logger: None,
+            #[cfg(feature = "adaptive")]
+            significance_level: 0.1,
         }
     }
 }
@@ -259,8 +269,8 @@ where
 
     /// Calibrate the conformal predictor using previously collected data
     #[cfg(feature = "adaptive")]
-    pub fn calibrate(&mut self, significance_level: f64) {
-        self.seq_paxos.calibrate(significance_level);
+    pub fn calibrate(&mut self) {
+        self.seq_paxos.calibrate();
     }
 
     #[cfg(feature = "adaptive")]

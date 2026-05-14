@@ -1,3 +1,5 @@
+#[cfg(feature = "adaptive")]
+use crate::sequence_paxos::predictor::Label;
 use crate::{
     sequence_paxos::{
         messages::*,
@@ -22,7 +24,7 @@ where
         #[cfg(feature = "logging")]
         info!(self.logger, "Newly elected leader: {:?}", n);
         if self.pid == n.pid {
-            self.leader_state = LeaderState::with(n, self.peers.len() + 1);
+            self.leader_state = LeaderState::with(n, self.quorum);
             /* insert my promise */
             self.internal_storage.set_promise(n);
             let decided_idx = self.internal_storage.get_decided_idx();
@@ -87,7 +89,6 @@ where
                 for pid in self.leader_state.get_promised_followers() {
                     self.send_accsync(pid);
                 }
-                self.handle_buffered_proposals();
             }
         }
     }
@@ -165,6 +166,28 @@ where
     }
 
     pub(crate) fn handle_accepted(&mut self, accepted: Accepted<T>, from: NodeId) {
+        #[cfg(feature = "adaptive")]
+        if accepted.accept_status == AcceptStatus::TestAccepted {
+            if !self.calibrated {
+                if let Some(index) =
+                    self.test_proposals
+                        .iter()
+                        .position(|(slot_idx, entry, _, _)| {
+                            *slot_idx == accepted.slot_idx && entry == &accepted.entry
+                        })
+                {
+                    // Increase number of test accepts
+                    self.test_proposals[index].3 += 1;
+                    // If fast quorum would have been reached, add features and Success to
+                    // calibration data
+                    if self.quorum.is_fast_quorum(self.test_proposals[index].3) {
+                        let (_, _, features, _) = self.test_proposals.remove(index);
+                        self.calibration_data.push((features, Label::Success));
+                    }
+                }
+            }
+            return;
+        }
         if accepted.n == self.leader_state.n_leader && self.state == (Role::Leader, Phase::Accept) {
             let leader_action = self.leader_state.add_proposal(
                 self.internal_storage.get_decided_idx(),

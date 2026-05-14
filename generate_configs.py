@@ -59,13 +59,13 @@ def main():
         f"{inst['name']}.{inst['zone'].split('/')[-1]}.c.conformal-consensus.internal:{PORT}"
         for inst in instances
     ]
-    os.makedirs("deploy_configs", exist_ok=True)
+    os.makedirs("configs", exist_ok=True)
     cluster_config = {
         "nodes": nodes,
         "node_addrs": node_addrs,
         "initial_leader": nodes[0],
     }
-    with open("deploy_configs/cluster.toml", "w") as f:
+    with open("configs/gcp_cluster.toml", "w") as f:
         f.write(to_toml(cluster_config))
 
     for i, inst in enumerate(instances):
@@ -79,29 +79,30 @@ def main():
             "listen_port": PORT,
             "num_clients": NUM_CLIENTS_PER_NODE,
             "output_filepath": f"/app/results/server_{node_id}.log",
+            "paxos_output_filepath": f"/app/results/paxos_{node_id}.log",
             "mode": "OmniPaxos",
-            "calibration_delay_ms": 40000,
+            "calibration_delay_ms": 5 * 60 * 1000,
             "significance_level": 0.2,
         }
-        with open(f"deploy_configs/server_{name}.toml", "w") as f:
+        with open(f"configs/server_{name}.toml", "w") as f:
             f.write(to_toml(server_cfg))
 
         client_cfg = {
             "server_id": node_id,
-            "server_address": f"localhost:{PORT}",
+            "server_address": f"127.0.0.1:{PORT}",
             "read_ratio": 0.5,
-            "max_duration_sec": 120,
+            "max_duration_sec": 10 * 60,
             "summary_filepath": f"/app/results/client_{node_id}_summary.log",
             "output_filepath": f"/app/results/client_{node_id}.log",
             "load_pattern": {
                 "type": "Cyclic",
-                "highest_rps": 50,
-                "lowest_rps": 5,
+                "highest_rps": 100,
+                "lowest_rps": 1,
                 "period_sec": 20,
                 "offset_sec": 0,
             },
         }
-        with open(f"deploy_configs/client_{name}.toml", "w") as f:
+        with open(f"configs/client_{name}.toml", "w") as f:
             f.write(to_toml(client_cfg))
 
     print(f"Generated {len(instances)} server and client configs in ./deploy_configs")

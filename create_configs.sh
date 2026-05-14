@@ -19,7 +19,8 @@ if [ "$MODE" != "FastPaxos" ] && [ "$MODE" != "OmniPaxos" ]; then
 fi
 
 CONFIG_DIR="configs"
-LOG_DIR="logs"
+LOG_DIR="results"
+SERVER_PORT=8000
 
 mkdir -p $CONFIG_DIR
 mkdir -p $LOG_DIR
@@ -30,10 +31,8 @@ NODE_IDS=""
 NODE_ADDRS=""
 
 for ((i = 1; i <= $NUM_NODES; i++)); do
-  PORT=$((8000 + i))
-
   NODE_IDS+="$i"
-  NODE_ADDRS+="\"127.0.0.1:$PORT\""
+  NODE_ADDRS+="\"s$i:$SERVER_PORT\""
 
   if [ "$i" -lt "$NUM_NODES" ]; then
     NODE_IDS+=", "
@@ -49,21 +48,21 @@ initial_leader = $NUM_NODES
 EOF
 
 for ((i = 1; i <= $NUM_NODES; i++)); do
-  SERVER_PORT=$((8000 + i))
   cat <<EOF >"$CONFIG_DIR/server_$i.toml"
 server_id = $i
-listen_address = "127.0.0.1"
+listen_address = "0.0.0.0"
 listen_port = $SERVER_PORT
 num_clients = 1
 mode = "$MODE"
 output_filepath = "$LOG_DIR/server_$i.log"
-significance_level = 0.3
+paxos_output_filepath = "$LOG_DIR/paxos_$i.log"
+significance_level = 0.1
 calibration_delay_ms = 40000
 EOF
 
   cat <<EOF >"$CONFIG_DIR/client_$i.toml"
 server_id = $i
-server_address = "127.0.0.1:$SERVER_PORT"
+server_address = "s$i:$SERVER_PORT"
 summary_filepath = "$LOG_DIR/client_summary_$i.log"
 output_filepath = "$LOG_DIR/client_output_$i.log"
 max_duration_sec = 120

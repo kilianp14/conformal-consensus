@@ -22,6 +22,8 @@ pub enum AcceptStatus {
     FpFastAccepted,
     /// Accepted via the slow path of FastPaxos
     FpSlowAccepted,
+    /// Only for testing if fast path would have succeeded
+    TestAccepted,
 }
 
 /// The entry read in the log.

@@ -10,6 +10,7 @@ wait_timeout_ms = 3000
 num_threads = 8
 num_nodes = 5
 num_proposals = 15000
+significance_level = 0.1
 storage_type = { type = "Memory" }
 
 [reconnect_test]

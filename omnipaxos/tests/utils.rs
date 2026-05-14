@@ -324,10 +324,10 @@ impl TestSystem {
 
     /// Triggers calibration on all nodes in the cluster with the given significance level.
     #[cfg(feature = "adaptive")]
-    pub fn calibrate_all_nodes(&self, significance_level: f64) {
+    pub fn calibrate_all_nodes(&self) {
         for node in &self.nodes {
             node.1.on_definition(|comp| {
-                comp.paxos.calibrate(significance_level);
+                comp.paxos.calibrate();
             });
         }
     }

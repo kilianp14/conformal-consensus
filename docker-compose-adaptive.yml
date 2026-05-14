@@ -16,7 +16,7 @@ services:
     volumes:
       - ./configs/server_1.toml:/app/server-config.toml
       - ./configs/cluster.toml:/app/cluster-config.toml
-      - ./logs/:/app/logs/
+      - ./results/:/app/results/
 
   s2: &server-base
     image: omnipaxos-server-adaptive
@@ -25,7 +25,7 @@ services:
     volumes:
       - ./configs/server_2.toml:/app/server-config.toml
       - ./configs/cluster.toml:/app/cluster-config.toml
-      - ./logs/:/app/logs/
+      - ./results/:/app/results/
 
   s3:
     <<: *server-base
@@ -33,7 +33,7 @@ services:
     volumes:
       - ./configs/server_3.toml:/app/server-config.toml
       - ./configs/cluster.toml:/app/cluster-config.toml
-      - ./logs/:/app/logs/
+      - ./results/:/app/results/
 
 
   # --- CLIENTS ---
@@ -47,7 +47,7 @@ services:
       OMNIPAXOS_SERVER_ADDRESS: "s1:8000"
     volumes:
       - ./configs/client_1.toml:/app/client-config.toml
-      - ./logs/:/app/logs/
+      - ./results/:/app/results/
 
   c2: &client-base
     image: omnipaxos-client
@@ -58,7 +58,7 @@ services:
       OMNIPAXOS_SERVER_ADDRESS: "s2:8000"
     volumes:
       - ./configs/client_2.toml:/app/client-config.toml
-      - ./logs/:/app/logs/
+      - ./results/:/app/results/
 
   c3:
     <<: *client-base
@@ -69,5 +69,5 @@ services:
       OMNIPAXOS_SERVER_ADDRESS: "s3:8000"
     volumes:
       - ./configs/client_3.toml:/app/client-config.toml
-      - ./logs/:/app/logs/
+      - ./results/:/app/results/
 

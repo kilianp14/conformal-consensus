@@ -7,7 +7,6 @@ IMAGE_PROJECT="debian-cloud"
 
 # Finland, Madrid, Netherlands, Warsaw, Frankfurt
 REGIONS=("europe-north1" "europe-southwest1" "europe-west4" "europe-central2" "europe-west3")
-#REGIONS=("europe-north1")
 
 for REGION in "${REGIONS[@]}"; do
   INSTANCE_NAME="node-eu-${REGION}"

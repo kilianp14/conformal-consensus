@@ -22,6 +22,7 @@ pub struct LocalConfig {
     pub listen_port: u16,
     pub num_clients: usize,
     pub output_filepath: String,
+    pub paxos_output_filepath: String,
     pub mode: Mode,
     #[cfg(feature = "adaptive")]
     pub calibration_delay_ms: u64,
@@ -45,6 +46,9 @@ impl From<OmniPaxosKVConfig> for OmniPaxosConfig {
         let server_config = OmnipaxosServerConfig {
             pid: config.local.server_id,
             mode: config.local.mode,
+            #[cfg(feature = "adaptive")]
+            significance_level: config.local.significance_level,
+            logger_file_path: Some(config.local.paxos_output_filepath),
             ..Default::default()
         };
         Self {

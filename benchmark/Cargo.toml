@@ -10,7 +10,11 @@ csv = "1.4.0"
 env_logger = "0.11.10"
 futures = "0.3.32"
 log = "0.4.29"
-omnipaxos = { path = "../omnipaxos", features = ["serde", "toml_config"] }
+omnipaxos = { path = "../omnipaxos", features = [
+  "serde",
+  "toml_config",
+  "logging",
+] }
 rand = "0.10.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"

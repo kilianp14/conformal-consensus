@@ -70,7 +70,6 @@ where
                 }
                 slot_idx += 1;
             }
-            self.handle_buffered_proposals();
         }
     }
 
@@ -205,6 +204,28 @@ where
         }
     }
 
+    pub(crate) fn handle_test_accept(&mut self, acc: Accept<T>, from: NodeId) {
+        if self.check_valid_ballot(acc.n) && self.state.1 == Phase::Accept {
+            #[cfg(feature = "logging")]
+            {
+                debug!(
+                    self.logger,
+                    "Pid {}. Incoming Test Accept: {:?}", self.pid, acc
+                );
+            }
+            // Would have been accepted if slot is currently empty
+            if self.internal_storage.slot_is_empty(acc.slot_idx) {
+                let accepted = Accepted {
+                    n: acc.n,
+                    entry: acc.entry,
+                    slot_idx: acc.slot_idx,
+                    accept_status: acc.accept_status,
+                };
+                self.send_msg_to(from, PaxosMsg::Accepted(accepted));
+            }
+        }
+    }
+
     pub(crate) fn handle_decide(&mut self, dec: Decide<T>) {
         if self.check_valid_ballot(dec.n)
             && self.state.1 == Phase::Accept
@@ -214,6 +235,17 @@ where
             {
                 debug!(self.logger, "Pid {}. Incoming Decide: {:?}", self.pid, dec);
             }
+
+            #[cfg(feature = "adaptive")]
+            if !self.calibrated {
+                // If slot is decided, remaining test accepts for this slot have never succeeded
+                let tested_elements = self
+                    .test_proposals
+                    .extract_if(.., |(i, _, _, _)| *i <= dec.slot_idx);
+                for (_, _, features, _) in tested_elements {
+                    self.calibration_data.push((features, Label::NoSuccess));
+                }
+            }
             // Check if this node proposed something for this slot
             if let Some(own_proposed_entry_at_slot) = self.pending_proposals.remove(&dec.slot_idx) {
                 #[cfg(not(feature = "adaptive"))]
@@ -222,13 +254,12 @@ where
                 let (own_prop_entry, features) = own_proposed_entry_at_slot;
                 #[cfg(feature = "adaptive")]
                 {
-                    // Update fast-path success meta-data
+                    // Update fast-path success/error meta-data
                     if self.calibrated {
-                        self.calibrated_fast_path_tries += 1;
-                        if dec.accept_status == AcceptStatus::FpFastAccepted
-                            && own_prop_entry == dec.entry
+                        if dec.accept_status != AcceptStatus::FpFastAccepted
+                            || own_prop_entry != dec.entry
                         {
-                            self.calibrated_fast_path_successes += 1
+                            self.calibrated_fast_path_errors += 1
                         }
                     } else if let Some(features) = features {
                         if dec.accept_status == AcceptStatus::FpFastAccepted

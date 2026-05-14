@@ -39,19 +39,19 @@ where
         }
     }
 
+    pub fn get_next_empty_slot(&self) -> usize {
+        match self.empty_slots.first() {
+            Some(index) => *index,
+            None => self.log.len(),
+        }
+    }
+
     /// Inserts a single entry into the log. Picks the first empty index if there exists one,
     /// otherwise appends at the end
     pub fn add_entry(&mut self, entry: LogEntry<T>) -> usize {
-        match self.empty_slots.pop_first() {
-            Some(index) => {
-                self.insert_at_index(index, entry);
-                index
-            }
-            None => {
-                self.log.push(entry);
-                self.log.len() - 1
-            }
-        }
+        let index = self.get_next_empty_slot();
+        self.insert_at_index(index, entry);
+        index
     }
 
     /// Truncate the log at index and append the new suffix, returns new accepted index (log length)
@@ -86,7 +86,7 @@ where
         } else if index == self.log.len() {
             self.log.push(value);
         } else {
-            // Fill the gap with None
+            // Fill the gap with Empty entries
             for gap_idx in self.log.len()..index {
                 self.empty_slots.insert(gap_idx);
             }

@@ -19,6 +19,7 @@ use tokio::{sync::mpsc, task::JoinHandle};
 use crate::configs::OmniPaxosKVConfig;
 
 pub struct Network {
+    id: NodeId,
     peers: Vec<NodeId>,
     peer_connections: Vec<Option<PeerConnection>>,
     client_connections: HashMap<ClientId, ClientConnection>,
@@ -43,7 +44,7 @@ fn get_addrs(config: OmniPaxosKVConfig) -> (SocketAddr, Vec<SocketAddr>) {
         .cluster
         .node_addrs
         .into_iter()
-        .map(|addr_str| resolve_addr_with_retry(&addr_str, 10))
+        .map(|addr_str| resolve_addr_with_retry(&addr_str, 15))
         .collect();
 
     (listen_address, node_addresses)
@@ -67,6 +68,7 @@ impl Network {
         let (cluster_message_sender, cluster_messages) = tokio::sync::mpsc::channel(batch_size);
         let (client_message_sender, client_messages) = tokio::sync::mpsc::channel(batch_size);
         let mut network = Self {
+            id,
             peers: peer_addresses.iter().map(|(id, _)| *id).collect(),
             peer_connections: cluster_connections,
             client_connections: HashMap::new(),
@@ -252,7 +254,10 @@ impl Network {
                 }
                 None => warn!("Not connected to node {to}"),
             },
-            None => error!("Sending to unexpected node {to}"),
+            None => error!(
+                "Node {}: Sending {:?} to unexpected node {to}",
+                self.id, msg
+            ),
         }
     }
 
