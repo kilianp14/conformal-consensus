@@ -81,8 +81,14 @@ def main():
             "output_filepath": f"/app/results/server_{node_id}.log",
             "paxos_output_filepath": f"/app/results/paxos_{node_id}.log",
             "mode": "OmniPaxos",
-            "calibration_delay_ms": 5 * 60 * 1000,
-            "significance_level": 0.2,
+            "calibration_delays_ms": [
+                2 * 60 * 1000,
+                2 * 60 * 1000,
+                2 * 60 * 1000,
+                2 * 60 * 1000,
+                2 * 60 * 1000,
+            ],
+            "significance_level": 0.1,
         }
         with open(f"configs/server_{name}.toml", "w") as f:
             f.write(to_toml(server_cfg))
@@ -91,7 +97,7 @@ def main():
             "server_id": node_id,
             "server_address": f"127.0.0.1:{PORT}",
             "read_ratio": 0.5,
-            "max_duration_sec": 10 * 60,
+            "max_duration_sec": 15 * 60,
             "summary_filepath": f"/app/results/client_{node_id}_summary.log",
             "output_filepath": f"/app/results/client_{node_id}.log",
             "load_pattern": {

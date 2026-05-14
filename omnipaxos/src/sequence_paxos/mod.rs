@@ -236,7 +236,7 @@ where
                             other_nodes_proposals_per_s,
                         };
                         self.mode = self.conformal_mode_predictor.get_new_mode(&features);
-                        if !self.calibrated {
+                        if self.calibrated {
                             self.calibrated_append_attempts += 1;
                         }
                         match self.mode {
@@ -345,7 +345,7 @@ where
 
     /// Calibrate
     #[cfg(feature = "adaptive")]
-    pub(crate) fn calibrate(&mut self) {
+    pub(crate) fn calibrate(&mut self, end: bool) {
         if self.calibrated {
             #[cfg(feature = "logging")]
             slog::warn!(self.logger, "Already successfully calibrated; skipping.");
@@ -356,7 +356,6 @@ where
             .calibrate(&self.calibration_data)
         {
             Ok((_l_hat, _emp_risk)) => {
-                self.calibrated = true;
                 #[cfg(feature = "logging")]
                 slog::info!(
                     self.logger,
@@ -366,6 +365,8 @@ where
                     _l_hat,
                     _emp_risk
                 );
+                self.calibration_data.clear();
+                self.calibrated = end;
             }
             Err(_e) => {
                 #[cfg(feature = "logging")]

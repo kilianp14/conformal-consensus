@@ -57,7 +57,7 @@ mode = "$MODE"
 output_filepath = "$LOG_DIR/server_$i.log"
 paxos_output_filepath = "$LOG_DIR/paxos_$i.log"
 significance_level = 0.1
-calibration_delay_ms = 40000
+calibration_delays_ms = [40000, 40000, 40000, 40000]
 EOF
 
   cat <<EOF >"$CONFIG_DIR/client_$i.toml"
@@ -65,7 +65,7 @@ server_id = $i
 server_address = "s$i:$SERVER_PORT"
 summary_filepath = "$LOG_DIR/client_summary_$i.log"
 output_filepath = "$LOG_DIR/client_output_$i.log"
-max_duration_sec = 120
+max_duration_sec = 200
 read_ratio = 0.8
 
 [load_pattern]

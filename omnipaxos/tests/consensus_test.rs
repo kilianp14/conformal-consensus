@@ -27,7 +27,7 @@ fn consensus_test() {
     for (_i, v) in vec_proposals.iter().enumerate() {
         #[cfg(feature = "adaptive")]
         if _i as u64 == cfg.num_proposals / 2 {
-            sys.calibrate_all_nodes();
+            sys.calibrate_all_nodes(true);
         }
         // Pick a random node (1 to num_nodes)
         let random_pid = rng.gen_range(1..=cfg.num_nodes as NodeId);

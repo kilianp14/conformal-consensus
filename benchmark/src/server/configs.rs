@@ -25,7 +25,7 @@ pub struct LocalConfig {
     pub paxos_output_filepath: String,
     pub mode: Mode,
     #[cfg(feature = "adaptive")]
-    pub calibration_delay_ms: u64,
+    pub calibration_delays_ms: Vec<u64>,
     #[cfg(feature = "adaptive")]
     pub significance_level: f64,
 }

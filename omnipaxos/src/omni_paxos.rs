@@ -268,9 +268,10 @@ where
     }
 
     /// Calibrate the conformal predictor using previously collected data
+    /// If end is set, no more data is collected for further calibration
     #[cfg(feature = "adaptive")]
-    pub fn calibrate(&mut self) {
-        self.seq_paxos.calibrate();
+    pub fn calibrate(&mut self, end: bool) {
+        self.seq_paxos.calibrate(end);
     }
 
     #[cfg(feature = "adaptive")]
