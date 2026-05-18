@@ -78,6 +78,10 @@ where
         entry: T,
         #[cfg(feature = "adaptive")] features: Features,
     ) {
+        #[cfg(feature = "logging")]
+        {
+            self.fast_path_stats.fast_path_attempts += 1;
+        }
         let accept_status = AcceptStatus::FpFastAccepted;
         // Add to storage
         let slot_idx = self
@@ -107,14 +111,7 @@ where
             entry,
             accept_status,
         };
-        match self.state.0 {
-            Role::Follower => {
-                self.send_msg_to(self.get_current_leader(), PaxosMsg::Accepted(accepted));
-            }
-            Role::Leader => {
-                self.handle_accepted(accepted, self.pid);
-            }
-        }
+        self.send_msg_to(self.get_current_leader(), PaxosMsg::Accepted(accepted));
     }
 
     pub(crate) fn handle_fast_accept(&mut self, acc: Accept<T>) {
@@ -237,7 +234,7 @@ where
             }
 
             #[cfg(feature = "adaptive")]
-            if !self.calibrated {
+            if self.calibrating {
                 // If slot is decided, remaining test accepts for this slot have never succeeded
                 let tested_elements = self
                     .test_proposals
@@ -249,32 +246,37 @@ where
             // Check if this node proposed something for this slot
             if let Some(own_proposed_entry_at_slot) = self.pending_proposals.remove(&dec.slot_idx) {
                 #[cfg(not(feature = "adaptive"))]
-                let own_prop_entry = own_proposed_entry_at_slot;
+                let own_entry = own_proposed_entry_at_slot;
                 #[cfg(feature = "adaptive")]
-                let (own_prop_entry, features) = own_proposed_entry_at_slot;
-                #[cfg(feature = "adaptive")]
-                {
-                    // Update fast-path success/error meta-data
-                    if self.calibrated {
-                        if dec.accept_status != AcceptStatus::FpFastAccepted
-                            || own_prop_entry != dec.entry
-                        {
-                            self.calibrated_fast_path_errors += 1
-                        }
-                    } else if let Some(features) = features {
-                        if dec.accept_status == AcceptStatus::FpFastAccepted
-                            && own_prop_entry == dec.entry
-                        {
+                let (own_entry, features) = own_proposed_entry_at_slot;
+                if dec.accept_status == AcceptStatus::FpFastAccepted && own_entry == dec.entry {
+                    // Update fast-path success meta-data
+                    #[cfg(feature = "logging")]
+                    {
+                        self.fast_path_stats.fast_path_successes += 1;
+                    }
+                    #[cfg(feature = "adaptive")]
+                    if let Some(features) = features {
+                        if self.calibrating {
                             self.calibration_data.push((features, Label::Success));
-                        } else {
+                        }
+                    }
+                } else {
+                    // Update fast-path error meta-data
+                    #[cfg(feature = "logging")]
+                    {
+                        self.fast_path_stats.fast_path_errors += 1;
+                    }
+                    #[cfg(feature = "adaptive")]
+                    if let Some(features) = features {
+                        if self.calibrating {
                             self.calibration_data.push((features, Label::NoSuccess));
                         }
                     }
                 }
-
-                if own_prop_entry != dec.entry {
-                    // The slot was taken by another entry; retry proposal
-                    self.append(own_prop_entry);
+                // Retry mechanic
+                if self.retrying && own_entry != dec.entry {
+                    self.append(own_entry);
                 }
             }
             self.internal_storage

@@ -48,6 +48,21 @@ initial_leader = $NUM_NODES
 EOF
 
 for ((i = 1; i <= $NUM_NODES; i++)); do
+  CALIBRATION_BLOCK="calibration_schedule = []"
+  # Assume that last node is always the leader who does not need calibration
+  if ((i < NUM_NODES)); then
+    CALIBRATION_BLOCK=$(
+      cat <<SCHE_EOF
+[[calibration_schedule]]
+start_delay_ms = $(((i - 1) * 40000))
+duration_ms = 40000
+
+[[calibration_schedule]]
+start_delay_ms = $(((NUM_NODES + i - 2) * 40000))
+duration_ms = 40000
+SCHE_EOF
+    )
+  fi
   cat <<EOF >"$CONFIG_DIR/server_$i.toml"
 server_id = $i
 listen_address = "0.0.0.0"
@@ -57,7 +72,8 @@ mode = "$MODE"
 output_filepath = "$LOG_DIR/server_$i.log"
 paxos_output_filepath = "$LOG_DIR/paxos_$i.log"
 significance_level = 0.1
-calibration_delays_ms = [40000, 40000, 40000, 40000]
+enable_retry = false
+$CALIBRATION_BLOCK
 EOF
 
   cat <<EOF >"$CONFIG_DIR/client_$i.toml"
@@ -65,7 +81,7 @@ server_id = $i
 server_address = "s$i:$SERVER_PORT"
 summary_filepath = "$LOG_DIR/client_summary_$i.log"
 output_filepath = "$LOG_DIR/client_output_$i.log"
-max_duration_sec = 200
+max_duration_sec = 320
 read_ratio = 0.8
 
 [load_pattern]

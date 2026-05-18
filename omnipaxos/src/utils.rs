@@ -4,7 +4,11 @@ use serde::{Deserialize, Serialize};
 use slog::{o, Drain, Logger};
 use std::{cmp::Ordering, fmt::Debug};
 #[cfg(feature = "logging")]
-use std::{fs::OpenOptions, sync::Mutex};
+use std::{
+    fmt::{Display, Formatter, Result},
+    fs::OpenOptions,
+    sync::Mutex,
+};
 
 /// ID for an OmniPaxos node
 pub type NodeId = u64;
@@ -201,6 +205,102 @@ pub enum Mode {
     FastPaxos,
     /// OmniPaxos based
     OmniPaxos,
+}
+
+/// Stats to be collected during operation regarding fast path utilization
+#[derive(Clone, Debug, Default)]
+#[cfg(feature = "logging")]
+pub struct FastPathStats {
+    /// Total number of appends attempted (also counts retries)
+    pub append_attempts: u64,
+    /// Total number of appends attempted using fast-path
+    pub fast_path_attempts: u64,
+    /// Total number of appends with a successful fast-path
+    pub fast_path_successes: u64,
+    /// Total number of appends with an unsuccessful fast-path
+    pub fast_path_errors: u64,
+}
+
+#[cfg(feature = "logging")]
+impl FastPathStats {
+    /// Ratio of fast-path attempts compared to total append attempts
+    pub fn get_fast_path_utilization(&self) -> Option<f64> {
+        if self.append_attempts != 0 {
+            Some(self.fast_path_attempts as f64 / self.append_attempts as f64)
+        } else {
+            None
+        }
+    }
+
+    /// Ratio of fast-path errors compared to total append attempts
+    /// This should be bounded using CRC in adaptive mode
+    pub fn get_fast_path_error_rate_total(&self) -> Option<f64> {
+        if self.append_attempts != 0 {
+            Some(self.fast_path_errors as f64 / self.append_attempts as f64)
+        } else {
+            None
+        }
+    }
+
+    /// Ratio of fast-path successes compared to total append attempts
+    pub fn get_fast_path_success_rate_total(&self) -> Option<f64> {
+        if self.append_attempts != 0 {
+            Some(self.fast_path_successes as f64 / self.append_attempts as f64)
+        } else {
+            None
+        }
+    }
+
+    /// Ratio of fast-path errors compared to fast path attempts
+    pub fn get_fast_path_error_rate(&self) -> Option<f64> {
+        if self.fast_path_attempts != 0 {
+            Some(self.fast_path_errors as f64 / self.fast_path_attempts as f64)
+        } else {
+            None
+        }
+    }
+
+    /// Ratio of fast-path successes compared to fast path attempts
+    pub fn get_fast_path_success_rate(&self) -> Option<f64> {
+        if self.fast_path_attempts != 0 {
+            Some(self.fast_path_successes as f64 / self.fast_path_attempts as f64)
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(feature = "logging")]
+impl Display for FastPathStats {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        let fmt_pct = |opt: Option<f64>| match opt {
+            Some(v) => format!("{:.2}%", v * 100.0),
+            None => "N/A".to_string(),
+        };
+
+        writeln!(f, "=== Fast Path Statistics ===")?;
+        writeln!(f, "Total Append Attempts:  {}", self.append_attempts)?;
+        writeln!(
+            f,
+            "Fast Path Attempts:     {} (Utilization: {})",
+            self.fast_path_attempts,
+            fmt_pct(self.get_fast_path_utilization())
+        )?;
+        writeln!(
+            f,
+            "  ├─ Successes:         {} (Total Rate: {}, Path Success: {})",
+            self.fast_path_successes,
+            fmt_pct(self.get_fast_path_success_rate_total()),
+            fmt_pct(self.get_fast_path_success_rate())
+        )?;
+        write!(
+            f,
+            "  └─ Errors:            {} (Total Rate: {}, Path Error: {})",
+            self.fast_path_errors,
+            fmt_pct(self.get_fast_path_error_rate_total()),
+            fmt_pct(self.get_fast_path_error_rate())
+        )
+    }
 }
 
 /// Creates an asynchronous logger which outputs to both the terminal and a specified file_path.

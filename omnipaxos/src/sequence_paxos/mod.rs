@@ -1,5 +1,5 @@
 #[cfg(feature = "logging")]
-use crate::utils::create_logger;
+use crate::utils::{create_logger, FastPathStats};
 use crate::{
     sequence_paxos::{
         log::MemoryStorage,
@@ -10,6 +10,8 @@ use crate::{
 };
 #[cfg(feature = "logging")]
 use slog::{info, Logger};
+#[cfg(feature = "logging")]
+use std::mem;
 use std::{collections::HashMap, fmt::Debug};
 #[cfg(feature = "adaptive")]
 use std::{
@@ -43,6 +45,7 @@ pub(crate) struct SequencePaxosConfig {
     peers: Vec<NodeId>,
     buffer_size: usize,
     mode: Mode,
+    enable_retry: bool,
     #[cfg(feature = "logging")]
     logger_file_path: Option<String>,
     #[cfg(feature = "logging")]
@@ -65,6 +68,7 @@ impl From<OmniPaxosConfig> for SequencePaxosConfig {
             peers,
             buffer_size: config.server_config.buffer_size,
             mode: config.server_config.mode,
+            enable_retry: config.server_config.enable_retry,
             #[cfg(feature = "logging")]
             logger_file_path: config.server_config.logger_file_path,
             #[cfg(feature = "logging")]
@@ -91,6 +95,7 @@ where
     quorum: Quorum,
     leader_state: LeaderState<T>,
     cached_promise_message: Option<Promise<T>>,
+    retrying: bool,
     // Keeps track of sequence of accepts from leader where AcceptSync = 1
     current_seq_num: SequenceNumber,
     // Proposals of this node currently in transit
@@ -111,11 +116,9 @@ where
     #[cfg(feature = "adaptive")]
     calibration_data: Vec<(Features, Label)>,
     #[cfg(feature = "adaptive")]
-    calibrated: bool,
-    #[cfg(feature = "adaptive")]
-    calibrated_append_attempts: u64,
-    #[cfg(feature = "adaptive")]
-    calibrated_fast_path_errors: u64,
+    calibrating: bool,
+    #[cfg(feature = "logging")]
+    fast_path_stats: FastPathStats,
     #[cfg(feature = "logging")]
     logger: Logger,
 }
@@ -158,6 +161,7 @@ where
             leader_state: LeaderState::<T>::with(leader, quorum),
             cached_promise_message: None,
             current_seq_num: SequenceNumber::default(),
+            retrying: config.enable_retry,
             #[cfg(feature = "adaptive")]
             test_proposals: Vec::new(),
             #[cfg(feature = "adaptive")]
@@ -169,11 +173,9 @@ where
             #[cfg(feature = "adaptive")]
             calibration_data: Vec::with_capacity(10000),
             #[cfg(feature = "adaptive")]
-            calibrated: false,
-            #[cfg(feature = "adaptive")]
-            calibrated_append_attempts: 0,
-            #[cfg(feature = "adaptive")]
-            calibrated_fast_path_errors: 0,
+            calibrating: false,
+            #[cfg(feature = "logging")]
+            fast_path_stats: FastPathStats::default(),
             #[cfg(feature = "logging")]
             logger,
         };
@@ -210,6 +212,10 @@ where
         match self.state {
             (Role::Leader, Phase::Accept) => self.op_accept_entry_leader(entry),
             (Role::Follower, Phase::Accept) => {
+                #[cfg(feature = "logging")]
+                {
+                    self.fast_path_stats.append_attempts += 1;
+                }
                 #[cfg(not(feature = "adaptive"))]
                 {
                     match self.mode {
@@ -236,9 +242,6 @@ where
                             other_nodes_proposals_per_s,
                         };
                         self.mode = self.conformal_mode_predictor.get_new_mode(&features);
-                        if self.calibrated {
-                            self.calibrated_append_attempts += 1;
-                        }
                         match self.mode {
                             Mode::OmniPaxos => self.op_forward_proposal(entry, features),
                             Mode::FastPaxos => self.fp_fast_propose(entry, features),
@@ -278,7 +281,7 @@ where
             #[cfg(feature = "adaptive")]
             {
                 // Send test accept to all peers
-                if !self.calibrated {
+                if self.calibrating {
                     let slot_idx = self.internal_storage.get_next_empty_slot();
                     let acc = Accept {
                         n: self.internal_storage.get_promise(),
@@ -324,31 +327,29 @@ where
         self.fast_quorum_latency_in_s = latency;
     }
 
-    #[cfg(feature = "adaptive")]
-    pub(crate) fn get_fast_path_success_rate(&self) -> Option<f64> {
-        if self.calibrated_append_attempts != 0 {
-            let error_rate =
-                self.calibrated_fast_path_errors as f64 / self.calibrated_append_attempts as f64;
-            #[cfg(feature = "logging")]
-            info!(
-                self.logger,
-                "Node {} has a fast-path error rate of {} from {} attempts",
-                self.pid,
-                error_rate,
-                self.calibrated_append_attempts
-            );
-            Some(error_rate)
-        } else {
-            None
-        }
+    /// Resets, logs and returns current fast path stats
+    #[cfg(feature = "logging")]
+    pub(crate) fn take_fast_path_stats(&mut self) -> FastPathStats {
+        let stats = mem::take(&mut self.fast_path_stats);
+        slog::info!(self.logger, "Fast-path stats: {}", stats);
+        stats
     }
 
-    /// Calibrate
+    /// Start calibration
     #[cfg(feature = "adaptive")]
-    pub(crate) fn calibrate(&mut self, end: bool) {
-        if self.calibrated {
+    pub(crate) fn start_calibration(&mut self) {
+        self.calibrating = true;
+    }
+
+    /// End calibration
+    #[cfg(feature = "adaptive")]
+    pub(crate) fn end_calibration(&mut self) {
+        if !self.calibrating {
             #[cfg(feature = "logging")]
-            slog::warn!(self.logger, "Already successfully calibrated; skipping.");
+            slog::warn!(
+                self.logger,
+                "Not currently calibrating. Cannot end calibration"
+            );
             return;
         }
         match self
@@ -356,23 +357,14 @@ where
             .calibrate(&self.calibration_data)
         {
             Ok((_l_hat, _emp_risk)) => {
-                #[cfg(feature = "logging")]
-                slog::info!(
-                    self.logger,
-                    "Node {}: Calibration successful on calibration set of size {}! Lambda: {}. Empirical risk on calibration data: {}.",
-                    self.pid,
-                    self.calibration_data.len(),
-                    _l_hat,
-                    _emp_risk
-                );
                 self.calibration_data.clear();
-                self.calibrated = end;
             }
             Err(_e) => {
                 #[cfg(feature = "logging")]
                 slog::warn!(self.logger, "Node {}: Calibration failed: {}", self.pid, _e);
             }
         }
+        self.calibrating = false;
     }
 
     /// Handle an incoming message.

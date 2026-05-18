@@ -138,6 +138,7 @@ where
     /// Assumes that a majority has promised to the leader
     /// and that all log syncs sent by the followers start directly from said decided_idx
     /// slot status marks what to put in the status of the accepted but not yet decided values
+    /// TODO: Log syncing is NOT SAFE atm. NEEDS CHANGE FOR PROPER APPLICAION
     pub(crate) fn take_my_log_sync(
         &mut self,
         decided_idx: SlotId,
@@ -287,7 +288,11 @@ where
         );
 
         // Compute slot result
-        let slot_result = self.compute_propose_result(slot_idx);
+        let slot_proposals = self
+            .accept_meta
+            .get(&slot_idx)
+            .expect("There should never be no proposals");
+        let slot_result = compute_propose_result(slot_proposals, &self.quorum);
 
         // State Logic
         match slot_result {
@@ -323,79 +328,6 @@ where
         }
     }
 
-    fn compute_propose_result(&self, slot_idx: SlotId) -> SlotResult<T> {
-        let proposals = match self.accept_meta.get(&slot_idx) {
-            Some(p) => p,
-            None => return SlotResult::Pending,
-        };
-        // Not enough votes
-        let total_votes_in_slot = proposals.len();
-        if !self.quorum.is_majority_quorum(total_votes_in_slot) {
-            return SlotResult::Pending;
-        }
-
-        // Count number of votes for every entry
-        #[allow(clippy::type_complexity)]
-        let mut vote_counts: Vec<(&T, (usize, usize, usize, usize))> =
-            Vec::with_capacity(self.quorum.total_nodes);
-
-        for (entry, status) in proposals.values() {
-            let counts =
-                if let Some(existing) = vote_counts.iter_mut().find(|(val, _)| *val == entry) {
-                    &mut existing.1
-                } else {
-                    vote_counts.push((entry, (0, 0, 0, 0)));
-                    &mut vote_counts.last_mut().unwrap().1
-                };
-
-            counts.3 += 1; // Increment total
-            match status {
-                AcceptStatus::OpAccepted => counts.0 += 1,
-                AcceptStatus::FpFastAccepted => counts.1 += 1,
-                AcceptStatus::FpSlowAccepted => counts.2 += 1,
-                AcceptStatus::TestAccepted => {
-                    panic!("Test Entry should not be in leader decision process")
-                }
-            }
-        }
-
-        // Identify the entry with the most votes
-        let winner = vote_counts
-            .iter()
-            .max_by_key(|(_, (_, _, _, total))| *total)
-            .map(|(id, counts)| ((*id).clone(), *counts));
-
-        // Check if we can make a decision
-        if let Some((entry_id, (op, fast, slow, _))) = winner {
-            if self.quorum.is_majority_quorum(op) {
-                return SlotResult::Decided(entry_id, AcceptStatus::OpAccepted);
-            }
-            if self.quorum.is_fast_quorum(fast) {
-                return SlotResult::Decided(entry_id, AcceptStatus::FpFastAccepted);
-            }
-            if self.quorum.is_majority_quorum(slow) {
-                return SlotResult::Decided(entry_id, AcceptStatus::FpSlowAccepted);
-            }
-
-            // Calculate if a decision is still possible
-            let remaining_votes = self.quorum.total_nodes - total_votes_in_slot;
-
-            if self.quorum.is_fast_quorum(remaining_votes + fast)
-                || self.quorum.is_majority_quorum(remaining_votes + op)
-            {
-                // It is still possible to reach a decision if the
-                // remaining nodes vote for this entry_id.
-                SlotResult::Pending
-            } else {
-                // Even with all remaining votes, the winner cannot reach
-                // a required quorum. Transition to slow path.
-                SlotResult::SlowPath(entry_id)
-            }
-        } else {
-            panic!("Votes but no winner should not be possible");
-        }
-    }
-
     pub(crate) fn get_decided_idx(&self, pid: NodeId) -> Option<usize> {
         match self.promises_meta.get(&pid) {
             Some(PromiseState::Promised(_, decided_idx)) => Some(*decided_idx),
@@ -423,6 +355,88 @@ where
             })
             .collect()
     }
+}
+
+fn compute_propose_result<T>(
+    proposals: &HashMap<NodeId, (T, AcceptStatus)>,
+    quorum: &Quorum,
+) -> SlotResult<T>
+where
+    T: Entry,
+{
+    // Not enough votes
+    let total_votes_in_slot = proposals.len();
+    if !quorum.is_majority_quorum(total_votes_in_slot) {
+        return SlotResult::Pending;
+    }
+
+    // Count number of votes for every entry
+    #[allow(clippy::type_complexity)]
+    let mut vote_counts: Vec<(&T, (usize, usize, usize, usize))> =
+        Vec::with_capacity(quorum.total_nodes);
+
+    for (entry, status) in proposals.values() {
+        let counts = if let Some(existing) = vote_counts.iter_mut().find(|(val, _)| *val == entry) {
+            &mut existing.1
+        } else {
+            vote_counts.push((entry, (0, 0, 0, 0)));
+            &mut vote_counts.last_mut().unwrap().1
+        };
+
+        counts.3 += 1; // Increment total
+        match status {
+            AcceptStatus::OpAccepted => counts.0 += 1,
+            AcceptStatus::FpFastAccepted => counts.1 += 1,
+            AcceptStatus::FpSlowAccepted => counts.2 += 1,
+            AcceptStatus::TestAccepted => {
+                panic!("Test Entry should not be in leader decision process")
+            }
+        }
+    }
+
+    // Identify the entry with the most votes
+    let winner = vote_counts
+        .iter()
+        .max_by_key(|(_, (_, _, _, total))| *total)
+        .map(|(id, counts)| ((*id).clone(), *counts));
+
+    // Check if we can make a decision
+    if let Some((entry, (op, fast, slow, _))) = winner.clone() {
+        if quorum.is_majority_quorum(op) {
+            return SlotResult::Decided(entry, AcceptStatus::OpAccepted);
+        }
+        if quorum.is_fast_quorum(fast) {
+            return SlotResult::Decided(entry, AcceptStatus::FpFastAccepted);
+        }
+        if quorum.is_majority_quorum(slow) {
+            return SlotResult::Decided(entry, AcceptStatus::FpSlowAccepted);
+        }
+    }
+
+    if !quorum.is_fast_quorum(total_votes_in_slot) {
+        return SlotResult::Pending;
+    }
+
+    let remaining_votes = quorum.total_nodes - total_votes_in_slot;
+    for (_, (op, fast, _, _)) in vote_counts {
+        // Calculate if a decision is still possible
+        if quorum.is_fast_quorum(remaining_votes + fast)
+            || quorum.is_majority_quorum(remaining_votes + op)
+        {
+            // It is still possible to reach a decision if the
+            // remaining nodes vote for this entry_id.
+            // We could also initiate a slow path from this point since only one value
+            // is possible once more than a fast quorum has voted
+            return SlotResult::Pending;
+        }
+    }
+
+    // Collision definitely happened, continue slow path with value that has the most votes
+    SlotResult::SlowPath(
+        winner
+            .expect("no winner should not be possible at this point")
+            .0,
+    )
 }
 
 #[cfg(test)]

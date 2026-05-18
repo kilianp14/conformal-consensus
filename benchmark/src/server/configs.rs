@@ -9,6 +9,12 @@ use omnipaxos::{
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CalibrationWindow {
+    pub start_delay_ms: u64,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ClusterConfig {
     pub nodes: Vec<NodeId>,
     pub node_addrs: Vec<String>,
@@ -24,8 +30,9 @@ pub struct LocalConfig {
     pub output_filepath: String,
     pub paxos_output_filepath: String,
     pub mode: Mode,
+    pub enable_retry: bool,
     #[cfg(feature = "adaptive")]
-    pub calibration_delays_ms: Vec<u64>,
+    pub calibration_schedule: Vec<CalibrationWindow>,
     #[cfg(feature = "adaptive")]
     pub significance_level: f64,
 }
@@ -49,6 +56,7 @@ impl From<OmniPaxosKVConfig> for OmniPaxosConfig {
             #[cfg(feature = "adaptive")]
             significance_level: config.local.significance_level,
             logger_file_path: Some(config.local.paxos_output_filepath),
+            enable_retry: config.local.enable_retry,
             ..Default::default()
         };
         Self {

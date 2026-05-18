@@ -16,6 +16,7 @@ use tokio::signal::unix::{SignalKind, signal};
 const NETWORK_BATCH_SIZE: usize = 100;
 const LEADER_WAIT: Duration = Duration::from_secs(1);
 const ELECTION_TIMEOUT: Duration = Duration::from_secs(1);
+const SEND_OUTGOING_MESSAGES_INTERVAL: Duration = Duration::from_millis(1);
 
 pub struct OmniPaxosServer {
     id: NodeId,
@@ -30,6 +31,8 @@ pub struct OmniPaxosServer {
     calibration_time: Option<i64>,
     #[cfg(feature = "adaptive")]
     calibration_index: usize,
+    #[cfg(feature = "adaptive")]
+    is_calibrating: bool,
 }
 
 impl OmniPaxosServer {
@@ -52,6 +55,8 @@ impl OmniPaxosServer {
             calibration_time: None,
             #[cfg(feature = "adaptive")]
             calibration_index: 0,
+            #[cfg(feature = "adaptive")]
+            is_calibrating: false,
         }
     }
 
@@ -65,36 +70,49 @@ impl OmniPaxosServer {
             .await;
         // Main event loop with leader election
         let mut election_interval = tokio::time::interval(ELECTION_TIMEOUT);
+        let mut outgoing_interval = tokio::time::interval(SEND_OUTGOING_MESSAGES_INTERVAL);
         loop {
             tokio::select! {
                 _ = shutdown_signal() => {
                     self.network.shutdown();
                     #[cfg(feature = "adaptive")]
-                    {
-                        self.omnipaxos.get_fast_path_success_rate();
-                    }
+                    self.omnipaxos.take_fast_path_stats();
                     break;
                 }
                 _ = election_interval.tick() => {
                     self.omnipaxos.tick();
                     #[cfg(feature = "adaptive")]
                     if self.calibration_time.is_some_and(|t| Utc::now().timestamp_millis() >= t) {
-                        let delays = &self.config.local.calibration_delays_ms;
-                        let is_last = self.calibration_index == delays.len() - 1;
+                        let schedule = &self.config.local.calibration_schedule;
+                        if !self.is_calibrating {
+                            info!("{}: Triggering OmniPaxos calibration start {}/{}",
+                                self.id, self.calibration_index + 1, schedule.len());
 
-                        info!("{}: Triggering OmniPaxos calibration {}/{}",
-                            self.id, self.calibration_index + 1, delays.len());
+                            self.omnipaxos.take_fast_path_stats();
+                            self.omnipaxos.start_calibration();
+                            self.is_calibrating = true;
 
-                        self.omnipaxos.calibrate(is_last);
-                        self.calibration_index += 1;
-
-                        if self.calibration_index < delays.len() {
-                            let next_delay = delays[self.calibration_index];
-                            self.calibration_time = Some(Utc::now().timestamp_millis() + next_delay as i64);
+                            let duration = schedule[self.calibration_index].duration_ms;
+                            self.calibration_time = Some(Utc::now().timestamp_millis() + duration as i64);
                         } else {
-                            self.calibration_time = None;
+                            info!("{}: Triggering OmniPaxos calibration end {}/{}",
+                                self.id, self.calibration_index + 1, schedule.len());
+
+                            self.omnipaxos.take_fast_path_stats();
+                            self.omnipaxos.end_calibration();
+                            self.is_calibrating = false;
+                            self.calibration_index += 1;
+
+                            if self.calibration_index < schedule.len() {
+                                let next_delay = schedule[self.calibration_index].start_delay_ms;
+                                self.calibration_time = Some(Utc::now().timestamp_millis() + next_delay as i64);
+                            } else {
+                                self.calibration_time = None;
+                            }
                         }
                     }
+                },
+                _ = outgoing_interval.tick() => {
                     self.send_outgoing_msgs();
                 },
                 _ = self.network.cluster_messages.recv_many(&mut cluster_msg_buf, NETWORK_BATCH_SIZE) => {
@@ -123,8 +141,8 @@ impl OmniPaxosServer {
                         info!("{}: Leader fully initialized", self.id);
                         let experiment_sync_start = (Utc::now() + Duration::from_secs(5)).timestamp_millis();
                         #[cfg(feature = "adaptive")]
-                        if let Some(first_delay) = self.config.local.calibration_delays_ms.first() {
-                            self.calibration_time = Some(experiment_sync_start + *first_delay as i64);
+                        if let Some(first_window) = self.config.local.calibration_schedule.first() {
+                            self.calibration_time = Some(experiment_sync_start + first_window.start_delay_ms as i64);
                         }
                         self.send_cluster_start_signals(experiment_sync_start);
                         self.send_client_start_signals(experiment_sync_start);
@@ -214,8 +232,9 @@ impl OmniPaxosServer {
                     debug!("Received start message from peer {from}");
                     received_start_signal = true;
                     #[cfg(feature = "adaptive")]
-                    if let Some(first_delay) = self.config.local.calibration_delays_ms.first() {
-                        self.calibration_time = Some(start_time + *first_delay as i64);
+                    if let Some(first_window) = self.config.local.calibration_schedule.first() {
+                        self.calibration_time =
+                            Some(start_time + first_window.start_delay_ms as i64);
                     }
                     self.send_client_start_signals(start_time);
                 }

@@ -1,3 +1,5 @@
+#[cfg(feature = "logging")]
+use crate::utils::FastPathStats;
 use crate::{
     errors::{valid_config, ConfigError},
     leader_election::BallotLeaderElection,
@@ -127,6 +129,8 @@ pub struct ServerConfig {
     pub buffer_size: usize,
     /// Custom priority for this node to be elected as the leader.
     pub leader_priority: u32,
+    /// Whether server should retry failed appends
+    pub enable_retry: bool,
     /// The path where the default logger logs events.
     #[cfg(feature = "logging")]
     pub logger_file_path: Option<String>,
@@ -170,6 +174,7 @@ impl Default for ServerConfig {
             resend_message_tick_timeout: RESEND_MESSAGE_TIMEOUT,
             buffer_size: BUFFER_SIZE,
             leader_priority: 0,
+            enable_retry: true,
             #[cfg(feature = "logging")]
             logger_file_path: None,
             #[cfg(feature = "logging")]
@@ -267,17 +272,22 @@ where
         self.seq_paxos.append(entry)
     }
 
-    /// Calibrate the conformal predictor using previously collected data
-    /// If end is set, no more data is collected for further calibration
+    /// Start data collection for calibration
     #[cfg(feature = "adaptive")]
-    pub fn calibrate(&mut self, end: bool) {
-        self.seq_paxos.calibrate(end);
+    pub fn start_calibration(&mut self) {
+        self.seq_paxos.start_calibration();
     }
 
+    /// Calibrates and ends data collection
     #[cfg(feature = "adaptive")]
-    /// Get fast path success rate (only possible after successful calibration)
-    pub fn get_fast_path_success_rate(&self) -> Option<f64> {
-        self.seq_paxos.get_fast_path_success_rate()
+    pub fn end_calibration(&mut self) {
+        self.seq_paxos.end_calibration();
+    }
+
+    /// Take current fast path stats
+    #[cfg(feature = "logging")]
+    pub fn take_fast_path_stats(&mut self) -> FastPathStats {
+        self.seq_paxos.take_fast_path_stats()
     }
 
     /// Handles re-establishing a connection to a previously disconnected peer.

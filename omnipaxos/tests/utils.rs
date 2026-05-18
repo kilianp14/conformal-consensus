@@ -322,22 +322,22 @@ impl TestSystem {
         }
     }
 
-    /// Triggers calibration on all nodes in the cluster with the given significance level.
+    /// Starts calibration data collection
     #[cfg(feature = "adaptive")]
-    pub fn calibrate_all_nodes(&self, end: bool) {
+    pub fn start_calibration_all_nodes(&self) {
         for node in &self.nodes {
             node.1.on_definition(|comp| {
-                comp.paxos.calibrate(end);
+                comp.paxos.start_calibration();
             });
         }
     }
 
-    /// Triggers calibration on all nodes in the cluster with the given significance level.
+    /// Triggers calibration on all nodes in the cluster with previously given significance level
     #[cfg(feature = "adaptive")]
-    pub fn print_fast_path_success_rates(&self) {
+    pub fn end_calibration_all_nodes(&self) {
         for node in &self.nodes {
             node.1.on_definition(|comp| {
-                comp.paxos.get_fast_path_success_rate();
+                comp.paxos.end_calibration();
             });
         }
     }

@@ -23,11 +23,13 @@ fn consensus_test() {
     let vec_proposals = utils::create_proposals(1, cfg.num_proposals);
     let mut rng = rand::thread_rng();
 
+    #[cfg(feature = "adaptive")]
+    sys.start_calibration_all_nodes();
     // Propose values to random nodes with random intervals
     for (_i, v) in vec_proposals.iter().enumerate() {
         #[cfg(feature = "adaptive")]
         if _i as u64 == cfg.num_proposals / 2 {
-            sys.calibrate_all_nodes(true);
+            sys.end_calibration_all_nodes();
         }
         // Pick a random node (1 to num_nodes)
         let random_pid = rng.gen_range(1..=cfg.num_nodes as NodeId);
@@ -60,8 +62,6 @@ fn consensus_test() {
     check_quorum(&logs, quorum_size, &vec_proposals);
     check_validity(&logs, &vec_proposals);
     check_consistent_log_prefixes(&logs);
-    #[cfg(feature = "adaptive")]
-    sys.print_fast_path_success_rates();
 
     // Graceful Shutdown
     let kompact_system = std::mem::take(&mut sys.kompact_system).expect("No KompactSystem");

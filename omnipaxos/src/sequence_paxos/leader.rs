@@ -166,9 +166,10 @@ where
     }
 
     pub(crate) fn handle_accepted(&mut self, accepted: Accepted<T>, from: NodeId) {
+        // For followers (calibration)
         #[cfg(feature = "adaptive")]
         if accepted.accept_status == AcceptStatus::TestAccepted {
-            if !self.calibrated {
+            if self.calibrating {
                 if let Some(index) =
                     self.test_proposals
                         .iter()
@@ -245,7 +246,7 @@ where
                         let own_prop_entry = own_proposed_entry_at_slot;
                         #[cfg(feature = "adaptive")]
                         let own_prop_entry = own_proposed_entry_at_slot.0;
-                        if own_prop_entry != entry {
+                        if self.retrying && own_prop_entry != entry {
                             // The slot was taken by another entry; retry our proposal
                             self.append(own_prop_entry);
                         }
