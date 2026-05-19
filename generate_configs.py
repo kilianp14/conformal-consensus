@@ -1,10 +1,26 @@
 import subprocess
 import json
 import os
+import argparse
 
 EXPERIMENT_LABEL = "experiment=omnipaxos"
 PORT = 8000
 NUM_CLIENTS_PER_NODE = 1
+OUTPUT_DIR = "/app/results"
+READ_RATIO = 0.5
+EXPERIMENT_DURATION = 8 * 60  # 8 minutes
+CALIBRATION_ROUNDS = 12
+CALIBRATION_DURATION = 60  # 1 minute
+
+LOAD_PATTERNS = {
+    "cyclic": {
+        "type": "Cyclic",
+        "highest_rps": 50,
+        "lowest_rps": 1,
+        "period_sec": 60,
+        "offset_sec": 0,
+    }
+}
 
 
 def to_toml(data, prefix="") -> str:
@@ -65,7 +81,7 @@ def get_instances():
         return []
 
 
-def main():
+def main(mode, load, retry: bool, parallel: bool, significance: float):
     instances = sorted(get_instances(), key=lambda x: x["name"])
 
     # Move the wanted leader to the back
@@ -103,43 +119,48 @@ def main():
             "listen_address": "0.0.0.0",
             "listen_port": PORT,
             "num_clients": NUM_CLIENTS_PER_NODE,
-            "output_filepath": f"/app/results/server_{node_id}.log",
-            "paxos_output_filepath": f"/app/results/paxos_{node_id}.log",
-            "mode": "OmniPaxos",
-            "enable_retry": False,
-            # Leader (node with highest pid) does no calibration
-            "calibration_schedule": []
-            if i == len(instances) - 1
-            else [
-                {
-                    "start_delay_ms": i * 60000,
-                    "duration_ms": 60000,
-                },
-                {
-                    "start_delay_ms": (len(instances) - 1 + i) * 60000,
-                    "duration_ms": 60000,
-                },
-            ],
-            "significance_level": 0.1,
+            "output_filepath": f"{OUTPUT_DIR}/server_{node_id}.log",
+            "paxos_output_filepath": f"{OUTPUT_DIR}/paxos_{node_id}.log",
+            "mode": "FastPaxos" if mode == "fast" else "OmniPaxos",
+            "enable_retry": retry,
+            "significance_level": significance,
         }
+        if mode == "crc_adaptive":
+            # No calibration for leader
+            server_cfg["calibration_schedule"] = (
+                []
+                if i == len(instances) - 1
+                else [
+                    {
+                        "start_delay_ms": r * CALIBRATION_DURATION * 1000,
+                        "duration_ms": CALIBRATION_DURATION * 1000,
+                    }
+                    for r in range(CALIBRATION_ROUNDS)
+                ]
+                if parallel
+                else [
+                    {
+                        "start_delay_ms": r * CALIBRATION_DURATION * 1000,
+                        "duration_ms": CALIBRATION_DURATION * 1000,
+                    }
+                    for r in range(CALIBRATION_ROUNDS)
+                    if r % i == 0
+                ],
+            )
         with open(f"configs/server_{name}.toml", "w") as f:
             f.write(to_toml(server_cfg))
 
         client_cfg = {
             "server_id": node_id,
             "server_address": f"127.0.0.1:{PORT}",
-            "read_ratio": 0.5,
-            "max_duration_sec": 16 * 60,  # 16 minutes (8 calibration, 8 testing)
-            "summary_filepath": f"/app/results/client_{node_id}_summary.log",
-            "output_filepath": f"/app/results/client_{node_id}.log",
-            "load_pattern": {
-                "type": "Cyclic",
-                "highest_rps": 100,
-                "lowest_rps": 1,
-                "period_sec": 20,
-                "offset_sec": 0,
-            },
+            "read_ratio": READ_RATIO,
+            "max_duration_sec": EXPERIMENT_DURATION,
+            "summary_filepath": f"{OUTPUT_DIR}/client_{node_id}_summary.log",
+            "output_filepath": f"{OUTPUT_DIR}/client_{node_id}.log",
+            "load_pattern": LOAD_PATTERNS[load],
         }
+        if mode == "crc_adaptive":
+            client_cfg["max_duration_sec"] += CALIBRATION_DURATION * CALIBRATION_ROUNDS
         with open(f"configs/client_{name}.toml", "w") as f:
             f.write(to_toml(client_cfg))
 
@@ -147,4 +168,55 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+
+    def restricted_float(x):
+        try:
+            x = float(x)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"{x} is not a floating point number")
+
+        if x < 0.0 or x > 1.0:
+            raise argparse.ArgumentTypeError(f"{x} not in range [0.0, 1.0]")
+        return x
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "mode",
+        type=str,
+        choices=["normal", "fast", "heuristic_adaptive", "crc_adaptive"],
+        help="Choose the execution mode",
+    )
+    parser.add_argument(
+        "load",
+        type=str,
+        choices=["cyclic"],
+        help="Choose the client load pattern",
+    )
+    parser.add_argument(
+        "--retry",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Paxos proposer have retrying enabled",
+    )
+    parser.add_argument(
+        "--parallel",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Calibration done in parallel",
+    )
+    parser.add_argument(
+        "--significance",
+        type=restricted_float,
+        default=0.1,
+        help="Significance level for calibration",
+    )
+
+    args = parser.parse_args()
+    main(
+        mode=args.mode,
+        load=args.load,
+        retry=args.retry,
+        parallel=args.parallel,
+        significance=args.significance,
+    )

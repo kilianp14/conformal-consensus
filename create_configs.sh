@@ -1,5 +1,27 @@
 #!/bin/bash
 
+# type = "Cyclic"
+# highest_rps = 100
+# lowest_rps = 5
+# period_sec = 20
+# offset_sec = 0
+# jitter = 0.5
+
+# type = "RegularBursts"
+# base_rps = 5
+# burst_rps = 200
+# interval_sec = 20
+# decay_rate = 1
+# jitter = 0.5
+
+# type = "RandomBursts"
+# base_rps = 5
+# burst_rps = 200
+# avg_interval_sec = 20
+# interval_std_dev_sec = 10
+# decay_rate = 0.5
+# jitter = 0.5
+
 if [ -z "$1" ]; then
   echo "Usage: $0 <number_of_nodes> <mode: OmniPaxos|FastPaxos>"
   exit 1
@@ -81,15 +103,16 @@ server_id = $i
 server_address = "s$i:$SERVER_PORT"
 summary_filepath = "$LOG_DIR/client_summary_$i.log"
 output_filepath = "$LOG_DIR/client_output_$i.log"
-max_duration_sec = 320
+max_duration_sec = 100
 read_ratio = 0.8
 
 [load_pattern]
-type = "Cyclic"
-highest_rps = 50
-lowest_rps = 5
-period_sec = 20
-offset_sec = 0
+type = "RegularBursts"
+base_rps = 5
+burst_rps = 200
+interval_sec = 20
+decay_rate = 1
+jitter = 0.5
 EOF
 done
 

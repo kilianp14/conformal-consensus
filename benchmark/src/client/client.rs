@@ -47,11 +47,12 @@ impl Client {
 
         let start_instant = Instant::now();
         let max_duration = Duration::from_secs(self.config.max_duration_sec);
-        let mut next_request_at = Instant::now()
-            + Duration::from_secs_f64(
-                1.0 / self.config.load_pattern.get_rps(Duration::from_secs(0)),
-            );
         let mut rng = rand::rng();
+
+        // Initialize the stateful load pattern runner
+        let mut load_runner = self.config.load_pattern.clone().into_runner();
+        let mut next_request_at =
+            Instant::now() + load_runner.next_delay(Duration::from_secs(0), &mut rng);
 
         info!(
             "{}: Starting requests with load pattern: {:?}",
@@ -75,7 +76,9 @@ impl Client {
                 _ = sleep_until(next_request_at) => {
                     let is_write = rng.random_bool(1.0 - self.config.read_ratio);
                     self.send_request(is_write).await;
-                    next_request_at = Instant::now() + Duration::from_secs_f64(1.0 / self.config.load_pattern.get_rps(elapsed));
+
+                    // Request the dynamic wait duration from the runner
+                    next_request_at = Instant::now() + load_runner.next_delay(elapsed, &mut rng);
                 },
             }
         }

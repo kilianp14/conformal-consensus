@@ -8,6 +8,7 @@ use omnipaxos::{
 };
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "adaptive")]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CalibrationWindow {
     pub start_delay_ms: u64,
