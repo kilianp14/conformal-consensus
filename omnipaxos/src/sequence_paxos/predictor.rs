@@ -63,7 +63,7 @@ impl ConformalModePredictor {
     pub fn get_new_mode(&self, features: &Features) -> Mode {
         let lambda = match self.lambda_hat {
             Some(l_hat) => l_hat,
-            None => self.significance_level, // Calibration phase -> use plain model
+            None => 1.0 - self.significance_level, // Not yet calibrated -> use plain model
         };
         let labels = self.get_prediction_set_with_lambda(features, lambda);
         if labels.contains(&Label::NoSuccess) {

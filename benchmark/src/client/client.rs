@@ -4,10 +4,11 @@ use crate::{configs::ClientConfig, data_collection::ClientData, network::Network
 use benchmark::common::{ClientId, KVCommand, NodeId, ServerMessage};
 use chrono::Utc;
 use log::{debug, info, warn};
-use rand::RngExt;
-use tokio::time::{Instant, sleep, sleep_until};
+use rand::{RngExt, SeedableRng, rngs::SmallRng};
+use tokio::time::{Instant, sleep_until};
 
 const NETWORK_BATCH_SIZE: usize = 100;
+const SEED: u64 = 14;
 
 pub struct Client {
     id: ClientId,
@@ -47,7 +48,7 @@ impl Client {
 
         let start_instant = Instant::now();
         let max_duration = Duration::from_secs(self.config.max_duration_sec);
-        let mut rng = rand::rng();
+        let mut rng = SmallRng::seed_from_u64(SEED);
 
         // Initialize the stateful load pattern runner
         let mut load_runner = self.config.load_pattern.clone().into_runner();
@@ -82,6 +83,16 @@ impl Client {
                 },
             }
         }
+        let drain_deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            tokio::select! {
+                biased;
+                Some(msg) = self.network.server_messages.recv() => self.handle_server_message(msg),
+                _ = sleep_until(drain_deadline) => {
+                    break;
+                }
+            }
+        }
 
         info!(
             "{}: Client finished: collected {} responses",
@@ -90,7 +101,6 @@ impl Client {
         );
         self.network.shutdown();
         self.save_results().expect("Failed to save results");
-        sleep(Duration::from_secs(10)).await;
     }
 
     fn handle_server_message(&mut self, msg: ServerMessage) {

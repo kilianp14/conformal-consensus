@@ -1,11 +1,14 @@
-use std::net::{SocketAddr, ToSocketAddrs};
-use std::thread;
-use std::time::Duration;
-
 use omnipaxos::{macros::Entry, messages::Message as OmniPaxosMessage};
 use serde::{Deserialize, Serialize};
-use tokio::net::TcpStream;
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use std::{
+    net::{SocketAddr, ToSocketAddrs},
+    thread,
+    time::Duration,
+};
+use tokio::net::{
+    TcpStream,
+    tcp::{OwnedReadHalf, OwnedWriteHalf},
+};
 use tokio_serde::{Framed, formats::Bincode};
 use tokio_util::codec::{Framed as CodecFramed, FramedRead, FramedWrite, LengthDelimitedCodec};
 

@@ -15,10 +15,11 @@ CALIBRATION_DURATION = 60  # 1 minute
 LOAD_PATTERNS = {
     "cyclic": {
         "type": "Cyclic",
-        "highest_rps": 50,
+        "highest_rps": 30,
         "lowest_rps": 1,
         "period_sec": 60,
         "offset_sec": 0,
+        "jitter": 0.5,
     }
 }
 
@@ -125,6 +126,8 @@ def main(mode, load, retry: bool, parallel: bool, significance: float):
             "enable_retry": retry,
             "significance_level": significance,
         }
+        if mode == "heuristic_adaptive":
+            server_cfg["calibration_schedule"] = []
         if mode == "crc_adaptive":
             # No calibration for leader
             server_cfg["calibration_schedule"] = (
@@ -144,8 +147,8 @@ def main(mode, load, retry: bool, parallel: bool, significance: float):
                         "duration_ms": CALIBRATION_DURATION * 1000,
                     }
                     for r in range(CALIBRATION_ROUNDS)
-                    if r % i == 0
-                ],
+                    if r % (len(instances) - 1) == i
+                ]
             )
         with open(f"configs/server_{name}.toml", "w") as f:
             f.write(to_toml(server_cfg))
@@ -168,17 +171,6 @@ def main(mode, load, retry: bool, parallel: bool, significance: float):
 
 
 if __name__ == "__main__":
-
-    def restricted_float(x):
-        try:
-            x = float(x)
-        except ValueError:
-            raise argparse.ArgumentTypeError(f"{x} is not a floating point number")
-
-        if x < 0.0 or x > 1.0:
-            raise argparse.ArgumentTypeError(f"{x} not in range [0.0, 1.0]")
-        return x
-
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
@@ -207,7 +199,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--significance",
-        type=restricted_float,
+        type=float,
         default=0.1,
         help="Significance level for calibration",
     )

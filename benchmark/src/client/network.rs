@@ -5,12 +5,13 @@ use benchmark::common::{
 };
 use futures::{SinkExt, StreamExt};
 use log::{error, info, warn};
-use std::net::SocketAddr;
-use std::time::Duration;
-use tokio::sync::mpsc::{self, channel};
-use tokio::task::JoinHandle;
-use tokio::{net::TcpStream, sync::mpsc::Receiver};
-use tokio::{sync::mpsc::Sender, time::interval};
+use std::{net::SocketAddr, time::Duration};
+use tokio::{
+    net::TcpStream,
+    sync::mpsc::{self, Receiver, Sender, channel},
+    task::JoinHandle,
+    time::interval,
+};
 
 pub struct Network {
     server_connections: Vec<Option<ServerConnection>>,

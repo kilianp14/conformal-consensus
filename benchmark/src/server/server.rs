@@ -75,7 +75,6 @@ impl OmniPaxosServer {
             tokio::select! {
                 _ = shutdown_signal() => {
                     self.network.shutdown();
-                    #[cfg(feature = "adaptive")]
                     self.omnipaxos.take_fast_path_stats();
                     break;
                 }

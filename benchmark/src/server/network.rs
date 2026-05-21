@@ -5,16 +5,21 @@ use benchmark::common::{
 };
 use futures::{SinkExt, StreamExt};
 use log::{error, info, warn};
-use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use std::{collections::HashMap, str::FromStr};
-use tokio::sync::mpsc::{Sender, UnboundedSender};
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    str::FromStr,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::mpsc::Receiver,
+    sync::{
+        mpsc,
+        mpsc::{Receiver, Sender, UnboundedSender},
+    },
+    task::JoinHandle,
 };
-use tokio::{sync::mpsc, task::JoinHandle};
 
 use crate::configs::OmniPaxosKVConfig;
 
