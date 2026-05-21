@@ -38,7 +38,7 @@ where
     T: Entry,
 {
     /// The entry is decided.
-    Decided(T),
+    Decided(T, AcceptStatus),
     /// The entry is NOT decided. Might be removed from log at later time
     Undecided(T, AcceptStatus),
     /// Slot is currently empty
@@ -48,7 +48,7 @@ where
 impl<T: PartialEq + Entry> PartialEq for LogEntry<T> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (LogEntry::Decided(e1), LogEntry::Decided(e2)) => e1 == e2,
+            (LogEntry::Decided(e1, _), LogEntry::Decided(e2, _)) => e1 == e2,
             (LogEntry::Empty, LogEntry::Empty) => true,
             (LogEntry::Undecided(e1, _), LogEntry::Undecided(e2, _)) => e1 == e2,
             _ => false,

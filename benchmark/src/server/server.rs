@@ -8,7 +8,7 @@ use log::*;
 use omnipaxos::{
     OmniPaxos, OmniPaxosConfig,
     messages::Message,
-    utils::{LogEntry, NodeId},
+    utils::{AcceptStatus, LogEntry, NodeId},
 };
 use std::{fs::File, io::Write, time::Duration};
 use tokio::signal::unix::{SignalKind, signal};
@@ -68,16 +68,28 @@ impl OmniPaxosServer {
         // We don't use Omnipaxos leader election at first and instead force a specific initial leader
         self.establish_initial_leader(&mut cluster_msg_buf, &mut client_msg_buf)
             .await;
+
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("Failed to install SIGTERM handler");
+        let mut sigint = signal(SignalKind::interrupt()).expect("Failed to install SIGINT handler");
+
         // Main event loop with leader election
         let mut election_interval = tokio::time::interval(ELECTION_TIMEOUT);
         let mut outgoing_interval = tokio::time::interval(SEND_OUTGOING_MESSAGES_INTERVAL);
         loop {
             tokio::select! {
-                _ = shutdown_signal() => {
-                    self.network.shutdown();
-                    self.omnipaxos.take_fast_path_stats();
-                    break;
-                }
+            _ = sigint.recv() => {
+                info!("SIGINT received");
+                self.network.shutdown();
+                self.omnipaxos.take_fast_path_stats();
+                break;
+            }
+            _ = sigterm.recv() => {
+                info!("SIGTERM received");
+                self.network.shutdown();
+                self.omnipaxos.take_fast_path_stats();
+                break;
+            }
                 _ = election_interval.tick() => {
                     self.omnipaxos.tick();
                     #[cfg(feature = "adaptive")]
@@ -177,7 +189,7 @@ impl OmniPaxosServer {
             let decided_commands = decided_entries
                 .into_iter()
                 .filter_map(|e| match e {
-                    LogEntry::Decided(cmd) => Some(cmd),
+                    LogEntry::Decided(cmd, accept_status) => Some((cmd, accept_status)),
                     _ => unreachable!(),
                 })
                 .collect();
@@ -185,13 +197,15 @@ impl OmniPaxosServer {
         }
     }
 
-    fn update_database_and_respond(&mut self, commands: Vec<Command>) {
-        for command in commands {
+    fn update_database_and_respond(&mut self, commands: Vec<(Command, AcceptStatus)>) {
+        for (command, accept_status) in commands {
             let read = self.database.handle_command(command.kv_cmd);
             if command.coordinator_id == self.id {
                 let response = match read {
-                    Some(read_result) => ServerMessage::Read(command.id, read_result),
-                    None => ServerMessage::Write(command.id),
+                    Some(read_result) => {
+                        ServerMessage::Read(command.id, read_result, accept_status)
+                    }
+                    None => ServerMessage::Write(command.id, accept_status),
                 };
                 self.network.send_to_client(command.client_id, response);
             }
@@ -275,19 +289,5 @@ impl OmniPaxosServer {
         output_file.write_all(config_json.as_bytes())?;
         output_file.flush()?;
         Ok(())
-    }
-}
-
-async fn shutdown_signal() {
-    let mut sigterm = signal(SignalKind::terminate()).expect("Failed to install SIGTERM handler");
-    let mut sigint = signal(SignalKind::interrupt()).expect("Failed to install SIGINT handler");
-
-    tokio::select! {
-        _ = sigint.recv() => {
-            info!("SIGINT received");
-        }
-        _ = sigterm.recv() => {
-            info!("SIGTERM received");
-        }
     }
 }

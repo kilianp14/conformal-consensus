@@ -252,7 +252,7 @@ where
                         }
                     }
                     self.internal_storage
-                        .insert_at_index(slot_idx, LogEntry::Decided(entry));
+                        .insert_at_index(slot_idx, LogEntry::Decided(entry, accept_status));
                 }
                 self.internal_storage.set_decided_idx(new_decided_index);
             }

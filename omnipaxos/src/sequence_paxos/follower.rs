@@ -279,8 +279,10 @@ where
                     self.append(own_entry);
                 }
             }
-            self.internal_storage
-                .insert_at_index(dec.slot_idx, LogEntry::Decided(dec.entry));
+            self.internal_storage.insert_at_index(
+                dec.slot_idx,
+                LogEntry::Decided(dec.entry, dec.accept_status),
+            );
             if dec.slot_idx >= self.internal_storage.get_decided_idx() {
                 self.internal_storage.set_decided_idx(dec.slot_idx + 1);
             }

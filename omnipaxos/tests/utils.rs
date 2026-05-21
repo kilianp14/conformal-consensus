@@ -491,7 +491,7 @@ pub mod omnireplica {
             if let Some(entries) = self.paxos.read_decided_suffix(self.decided_idx) {
                 for e in entries {
                     match e {
-                        LogEntry::Decided(i) => {
+                        LogEntry::Decided(i, _) => {
                             self.try_answer_decided_future(i.id);
                         }
                         err => panic!("{}", format!("Got unexpected entry: {:?}", err)),
@@ -543,7 +543,9 @@ pub mod verification {
     pub fn verify_log(read_log: Vec<LogEntry<Value>>, proposals: Vec<Value>) {
         let num_proposals = proposals.len();
         match &read_log[..] {
-            [LogEntry::Decided(_), ..] => verify_entries(&read_log, &proposals, 0, num_proposals),
+            [LogEntry::Decided(_, _), ..] => {
+                verify_entries(&read_log, &proposals, 0, num_proposals)
+            }
             [] => assert!(
                 proposals.is_empty(),
                 "Log is empty but should be {:?}",
@@ -570,7 +572,7 @@ pub mod verification {
         for (idx, entry) in read_entries.iter().enumerate() {
             let log_idx = idx + offset;
             match entry {
-                LogEntry::Decided(i) if log_idx < decided_idx => {
+                LogEntry::Decided(i, _) if log_idx < decided_idx => {
                     assert_eq!(*i, exp_entries[idx])
                 }
                 LogEntry::Undecided(i, _) if log_idx >= decided_idx => {
@@ -598,7 +600,7 @@ pub mod verification {
                 .iter()
                 .filter(|(_pid, log)| {
                     log.iter()
-                        .any(|entry| matches!(entry, LogEntry::Decided(val) if val == v))
+                        .any(|entry| matches!(entry, LogEntry::Decided(val, _) if val == v))
                 })
                 .count();
             let timed_out_proposal = num_nodes == 0;
@@ -616,7 +618,7 @@ pub mod verification {
     pub fn check_validity(logs: &[(NodeId, Vec<LogEntry<Value>>)], proposals: &[Value]) {
         logs.iter().for_each(|(_pid, log)| {
             for entry in log {
-                if let LogEntry::Decided(v) = entry {
+                if let LogEntry::Decided(v, _) = entry {
                     assert!(
                         proposals.contains(v),
                         "Node decided unproposed value: {:?}",

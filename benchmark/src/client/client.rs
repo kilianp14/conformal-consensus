@@ -109,7 +109,8 @@ impl Client {
             ServerMessage::StartSignal(_) => (),
             server_response => {
                 let cmd_id = server_response.command_id();
-                self.client_data.new_response(cmd_id);
+                let acc_status = server_response.accept_status();
+                self.client_data.new_response(cmd_id, acc_status);
             }
         }
     }

@@ -3,6 +3,7 @@ use std::{fs::File, io::Write};
 use benchmark::common::{CommandId, Timestamp};
 use chrono::Utc;
 use csv::Writer;
+use omnipaxos::utils::AcceptStatus;
 use serde::Serialize;
 
 use crate::configs::ClientConfig;
@@ -12,6 +13,7 @@ struct RequestData {
     request_time: Timestamp,
     write: bool,
     response_time: Option<Timestamp>,
+    accept_status: Option<AcceptStatus>,
 }
 
 pub struct ClientData {
@@ -32,13 +34,15 @@ impl ClientData {
             request_time: Utc::now().timestamp_millis(),
             write: is_write,
             response_time: None,
+            accept_status: None,
         };
         self.request_data.push(data);
     }
 
-    pub fn new_response(&mut self, command_id: CommandId) {
+    pub fn new_response(&mut self, command_id: CommandId, accept_status: AcceptStatus) {
         let response_time = Utc::now().timestamp_millis();
         self.request_data[command_id].response_time = Some(response_time);
+        self.request_data[command_id].accept_status = Some(accept_status);
         self.response_count += 1;
     }
 

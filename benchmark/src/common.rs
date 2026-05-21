@@ -1,4 +1,4 @@
-use omnipaxos::{macros::Entry, messages::Message as OmniPaxosMessage};
+use omnipaxos::{macros::Entry, messages::Message as OmniPaxosMessage, utils::AcceptStatus};
 use serde::{Deserialize, Serialize};
 use std::{
     net::{SocketAddr, ToSocketAddrs},
@@ -55,16 +55,24 @@ pub type ClientMessage = (CommandId, KVCommand);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ServerMessage {
-    Write(CommandId),
-    Read(CommandId, Option<String>),
+    Write(CommandId, AcceptStatus),
+    Read(CommandId, Option<String>, AcceptStatus),
     StartSignal(Timestamp),
 }
 
 impl ServerMessage {
     pub fn command_id(&self) -> CommandId {
         match self {
-            ServerMessage::Write(id) => *id,
-            ServerMessage::Read(id, _) => *id,
+            ServerMessage::Write(id, _) => *id,
+            ServerMessage::Read(id, _, _) => *id,
+            ServerMessage::StartSignal(_) => unimplemented!(),
+        }
+    }
+
+    pub fn accept_status(&self) -> AcceptStatus {
+        match self {
+            ServerMessage::Write(_, accept_status) => *accept_status,
+            ServerMessage::Read(_, _, accept_status) => *accept_status,
             ServerMessage::StartSignal(_) => unimplemented!(),
         }
     }
