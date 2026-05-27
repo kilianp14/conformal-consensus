@@ -50,10 +50,12 @@ ax2.set_xlabel("Fast Quorum Latency (in sec) * Incoming Accept Messages/sec")
 ax2.set_ylabel("Error (Actual - Pred)")
 
 # Plot 3: Model vs Actual
-inflight_proposals = df["latency_to_fast_fq"] * df["other_nodes_proposals_per_sec"]
+df["inflight_proposals"] = (
+    df["latency_to_fast_fq"] * df["other_nodes_proposals_per_sec"]
+)
 
 ax3.scatter(
-    inflight_proposals,
+    df["inflight_proposals"],
     df["successful_rate"],
     alpha=0.4,
     color="teal",
@@ -61,8 +63,8 @@ ax3.scatter(
 )
 
 x_range = np.logspace(
-    np.log10(inflight_proposals.min()),
-    np.log10(inflight_proposals.max()),
+    np.log10(df["inflight_proposals"].min()),
+    np.log10(df["inflight_proposals"].max()),
     500,
 )
 

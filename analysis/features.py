@@ -131,23 +131,23 @@ if __name__ == "__main__":
     )
 
     features = [
-        # "latency_to_leader",
-        # "latency_to_majority_cq",
-        # "latency_to_fast_fq",
-        # "latency_to_all_max",
-        # "own_proposals_per_sec",
-        # "leader_proposals_per_sec",
-        # "other_followers_proposals_per_sec",
-        # "max_follower_proposals_per_sec",
+        "latency_to_leader",
+        "latency_to_majority_cq",
+        "latency_to_fast_fq",
+        "latency_to_all_max",
+        "own_proposals_per_sec",
+        "leader_proposals_per_sec",
+        "other_followers_proposals_per_sec",
+        "max_follower_proposals_per_sec",
         # "other_nodes_proposals_per_sec",
-        # "number_of_nodes",
-        "in-flight_proposals",
+        "number_of_nodes",
+        # "in-flight_proposals",
     ]
     targets = [
         "successful_rate",
-        # "collision_rate",
-        # "leader_overwrite_rate",
-        # "follower_overwrite_rate",
+        "collision_rate",
+        "leader_overwrite_rate",
+        "follower_overwrite_rate",
     ]
-    result_dir = "./results/features_in-flight-proposals/"
+    result_dir = "./results/features_all/"
     analyze_follower_metrics(df, features, targets, result_dir)
