@@ -8,7 +8,6 @@ use rand::{RngExt, SeedableRng, rngs::SmallRng};
 use tokio::time::{Instant, sleep_until};
 
 const NETWORK_BATCH_SIZE: usize = 100;
-const SEED: u64 = 14;
 
 pub struct Client {
     id: ClientId,
@@ -48,39 +47,37 @@ impl Client {
 
         let start_instant = Instant::now();
         let max_duration = Duration::from_secs(self.config.max_duration_sec);
-        let mut rng = SmallRng::seed_from_u64(SEED);
+        let mut rng = SmallRng::seed_from_u64(self.config.seed);
 
         // Initialize the stateful load pattern runner
         let mut load_runner = self.config.load_pattern.clone().into_runner();
         let mut next_request_at =
             Instant::now() + load_runner.next_delay(Duration::from_secs(0), &mut rng);
 
+        let end_time = start_instant + max_duration;
         info!(
             "{}: Starting requests with load pattern: {:?}",
             self.id, self.config.load_pattern
         );
         loop {
-            let now = Instant::now();
-            let elapsed = now.duration_since(start_instant);
-
-            if elapsed >= max_duration {
-                info!(
-                    "{}: Max duration reached, stopping request generation",
-                    self.id
-                );
-                break;
-            }
-
             tokio::select! {
                 biased;
-                Some(msg) = self.network.server_messages.recv() => self.handle_server_message(msg),
+                Some(msg) = self.network.server_messages.recv() => {
+                    self.handle_server_message(msg);
+                }
+                _ = sleep_until(end_time) => {
+                    info!(
+                        "{}: Max duration reached, stopping request generation",
+                        self.id
+                    );
+                    break;
+                }
                 _ = sleep_until(next_request_at) => {
                     let is_write = rng.random_bool(1.0 - self.config.read_ratio);
                     self.send_request(is_write).await;
-
-                    // Request the dynamic wait duration from the runner
-                    next_request_at = Instant::now() + load_runner.next_delay(elapsed, &mut rng);
-                },
+                    let current_elapsed = Instant::now().duration_since(start_instant);
+                    next_request_at = Instant::now() + load_runner.next_delay(current_elapsed, &mut rng);
+                }
             }
         }
         let drain_deadline = Instant::now() + Duration::from_secs(5);

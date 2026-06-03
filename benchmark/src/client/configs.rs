@@ -11,6 +11,7 @@ pub struct ClientConfig {
     pub load_pattern: LoadPattern,
     pub read_ratio: f64,
     pub max_duration_sec: u64,
+    pub seed: u64,
     pub sync_time: Option<Timestamp>,
     pub summary_filepath: String,
     pub output_filepath: String,
@@ -167,11 +168,9 @@ impl LoadPatternRunner {
                 {
                     // Initialization of the stochastic burst schedule
                     if !*initialized {
-                        // Pretend a burst happened prior to startup by picking a random fraction
-                        // of a full interval duration to have already completed in the past.
                         let first_interval =
                             sample_normal(*avg_interval_sec, *interval_std_dev_sec, rng).max(0.01);
-                        let random_fraction = rng.random::<f64>(); // 0.0 to 1.0
+                        let random_fraction = rng.random::<f64>();
 
                         *last_burst_time = -(first_interval * random_fraction);
                         *next_burst_time = *last_burst_time + first_interval;
@@ -192,8 +191,10 @@ impl LoadPatternRunner {
                     let current_burst = burst_rps
                         * (*current_burst_jitter)
                         * (-decay_rate * time_since_burst).exp();
+
                     let rps = (base_rps + current_burst).max(0.001);
-                    Duration::from_secs_f64(1.0 / rps)
+                    let delay = (1.0 / rps).min(*next_burst_time - t);
+                    Duration::from_secs_f64(delay)
                 } else {
                     unreachable!()
                 }

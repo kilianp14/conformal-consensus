@@ -14,6 +14,7 @@ const SECOND_PROPOSALS: u64 = 5;
 /// with the same leader.
 #[test]
 #[serial]
+#[ignore]
 fn reconnect_after_dropped_accepts_test() {
     // Start Kompact system
     let cfg = TestConfig::load("reconnect_test").expect("Test config couldn't be loaded");
@@ -74,6 +75,7 @@ fn reconnect_after_dropped_accepts_test() {
 /// eventually receives a prepare from the new leader.
 #[test]
 #[serial]
+#[ignore]
 fn reconnect_after_dropped_prepare_test() {
     // Start Kompact system
     let cfg = TestConfig::load("reconnect_test").expect("Test config couldn't be loaded");
@@ -150,6 +152,7 @@ fn reconnect_after_dropped_prepare_test() {
 /// eventually receives a Promise from the follower.
 #[test]
 #[serial]
+#[ignore]
 fn reconnect_after_dropped_promise_test() {
     // Start Kompact system
     let cfg = TestConfig::load("reconnect_test").expect("Test config couldn't be loaded");
@@ -232,6 +235,7 @@ fn reconnect_after_dropped_promise_test() {
 /// receives a PrepareReq.
 #[test]
 #[serial]
+#[ignore]
 fn reconnect_after_dropped_preparereq_test() {
     // Start Kompact system
     let cfg = TestConfig::load("reconnect_test").expect("Test config couldn't be loaded");

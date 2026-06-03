@@ -27,6 +27,7 @@ pub struct OmniPaxosServer {
     omnipaxos_msg_buffer: Vec<Message<Command>>,
     config: OmniPaxosKVConfig,
     peers: Vec<NodeId>,
+    start_time: Option<i64>,
     #[cfg(feature = "adaptive")]
     calibration_time: Option<i64>,
     #[cfg(feature = "adaptive")]
@@ -51,6 +52,7 @@ impl OmniPaxosServer {
             omnipaxos_msg_buffer,
             peers: config.get_peers(config.local.server_id),
             config,
+            start_time: None,
             #[cfg(feature = "adaptive")]
             calibration_time: None,
             #[cfg(feature = "adaptive")]
@@ -116,7 +118,7 @@ impl OmniPaxosServer {
 
                             if self.calibration_index < schedule.len() {
                                 let next_delay = schedule[self.calibration_index].start_delay_ms;
-                                self.calibration_time = Some(Utc::now().timestamp_millis() + next_delay as i64);
+                                self.calibration_time = Some(self.start_time.unwrap() + next_delay as i64);
                             } else {
                                 self.calibration_time = None;
                             }
@@ -246,6 +248,7 @@ impl OmniPaxosServer {
                     received_start_signal = true;
                     #[cfg(feature = "adaptive")]
                     if let Some(first_window) = self.config.local.calibration_schedule.first() {
+                        self.start_time = Some(start_time);
                         self.calibration_time =
                             Some(start_time + first_window.start_delay_ms as i64);
                     }

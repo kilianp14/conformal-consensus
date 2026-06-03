@@ -418,16 +418,17 @@ where
     }
 
     let remaining_votes = quorum.total_nodes - total_votes_in_slot;
-    for (_, (op, fast, _, _)) in vote_counts {
+    for (e, (op, fast, slow, _)) in vote_counts {
         // Calculate if a decision is still possible
         if quorum.is_fast_quorum(remaining_votes + fast)
             || quorum.is_majority_quorum(remaining_votes + op)
+            || slow > 0
         {
             // It is still possible to reach a decision if the
             // remaining nodes vote for this entry_id.
             // We could also initiate a slow path from this point since only one value
             // is possible once more than a fast quorum has voted
-            return SlotResult::Pending;
+            return SlotResult::SlowPath(e.to_owned());
         }
     }
 

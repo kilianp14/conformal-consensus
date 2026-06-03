@@ -357,6 +357,93 @@ where
             .calibrate(&self.calibration_data)
         {
             Ok((_l_hat, _emp_risk)) => {
+                #[cfg(feature = "logging")]
+                {
+                    struct Stats {
+                        mean: f64,
+                        median: f64,
+                        std_dev: f64,
+                        min: f64,
+                        max: f64,
+                    }
+
+                    let compute_stats = |mut values: Vec<f64>| -> Stats {
+                        if values.is_empty() {
+                            return Stats {
+                                mean: 0.0,
+                                median: 0.0,
+                                std_dev: 0.0,
+                                min: 0.0,
+                                max: 0.0,
+                            };
+                        }
+
+                        let count = values.len() as f64;
+                        let mut sum = 0.0;
+                        let mut sum_of_squares = 0.0;
+                        let mut min = f64::INFINITY;
+                        let mut max = f64::NEG_INFINITY;
+
+                        for &val in &values {
+                            sum += val;
+                            sum_of_squares += val * val;
+                            if val < min {
+                                min = val;
+                            }
+                            if val > max {
+                                max = val;
+                            }
+                        }
+
+                        let mean = sum / count;
+                        let variance = ((sum_of_squares / count) - (mean * mean)).max(0.0);
+                        let std_dev = variance.sqrt();
+
+                        values.sort_by(|a, b| a.total_cmp(b));
+                        let mid = values.len() / 2;
+                        let median = if values.len().is_multiple_of(2) {
+                            (values[mid - 1] + values[mid]) / 2.0
+                        } else {
+                            values[mid]
+                        };
+
+                        Stats {
+                            mean,
+                            median,
+                            std_dev,
+                            min,
+                            max,
+                        }
+                    };
+
+                    let latencies: Vec<f64> = self
+                        .calibration_data
+                        .iter()
+                        .map(|(f, _)| f.fast_quorum_latency_in_s)
+                        .collect();
+
+                    let proposals: Vec<f64> = self
+                        .calibration_data
+                        .iter()
+                        .map(|(f, _)| f.other_nodes_proposals_per_s)
+                        .collect();
+
+                    let l_stats = compute_stats(latencies);
+                    let p_stats = compute_stats(proposals);
+
+                    slog::info!(
+                        self.logger,
+                        "Node {}: Calibration successful on calibration set of size {}! Lambda: {}. Empirical risk on calibration data: {}. \
+                        Latency Stats -> Mean: {:.4}s, Median: {:.4}s, StdDev: {:.4}s, Min: {:.4}s, Max: {:.4}s. \
+                        Proposals Stats -> Mean: {:.4}/s, Median: {:.4}/s, StdDev: {:.4}/s, Min: {:.4}/s, Max: {:.4}/s.",
+                        self.pid,
+                        self.calibration_data.len(),
+                        _l_hat,
+                        _emp_risk,
+                        l_stats.mean, l_stats.median, l_stats.std_dev, l_stats.min, l_stats.max,
+                        p_stats.mean, p_stats.median, p_stats.std_dev, p_stats.min, p_stats.max
+                    );
+                }
                 self.calibration_data.clear();
             }
             Err(_e) => {
