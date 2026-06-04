@@ -35,7 +35,9 @@ pub struct LocalConfig {
     #[cfg(feature = "adaptive")]
     pub calibration_schedule: Vec<CalibrationWindow>,
     #[cfg(feature = "adaptive")]
-    pub significance_level: f64,
+    pub risk_level: f64,
+    #[cfg(feature = "adaptive")]
+    pub learning_rate: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -55,7 +57,9 @@ impl From<OmniPaxosKVConfig> for OmniPaxosConfig {
             pid: config.local.server_id,
             mode: config.local.mode,
             #[cfg(feature = "adaptive")]
-            significance_level: config.local.significance_level,
+            risk_level: config.local.risk_level,
+            #[cfg(feature = "adaptive")]
+            learning_rate: config.local.learning_rate,
             logger_file_path: Some(config.local.paxos_output_filepath),
             enable_retry: config.local.enable_retry,
             ..Default::default()

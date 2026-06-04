@@ -8,19 +8,29 @@ PORT = 8000
 NUM_CLIENTS_PER_NODE = 1
 OUTPUT_DIR = "/app/results"
 READ_RATIO = 0.5
-EXPERIMENT_DURATION = 8 * 60  # 8 minutes
-CALIBRATION_ROUNDS = 12
-CALIBRATION_DURATION = 60  # 1 minute
+WARMUP_DURATION = 1 * 60  # 1 minute
+EXPERIMENT_DURATION = 10 * 60  # 10 minutes
+CALIBRATION_ROUNDS = 1
+CALIBRATION_DURATION = 5 * 60  # 5 minutes (only for offline calibration)
 
 LOAD_PATTERNS = {
     "cyclic": {
         "type": "Cyclic",
-        "highest_rps": 30,
+        "highest_rps": 10,
         "lowest_rps": 1,
         "period_sec": 60,
         "offset_sec": 0,
         "jitter": 0.5,
-    }
+    },
+    "localevents": {
+        "type": "RandomBursts",
+        "base_rps": 0,
+        "burst_rps": 50,
+        "avg_interval_sec": 20,
+        "interval_std_dev_sec": 10,
+        "decay_rate": 0.5,
+        "jitter": 0.5,
+    },
 }
 
 
@@ -82,7 +92,7 @@ def get_instances():
         return []
 
 
-def main(mode, load, retry: bool, parallel: bool, significance: float):
+def main(mode, load, retry: bool, risk: float, learning_rate: float):
     instances = sorted(get_instances(), key=lambda x: x["name"])
 
     # Move the wanted leader to the back
@@ -124,7 +134,8 @@ def main(mode, load, retry: bool, parallel: bool, significance: float):
             "paxos_output_filepath": f"{OUTPUT_DIR}/paxos_{node_id}.log",
             "mode": "FastPaxos" if mode == "fast" else "OmniPaxos",
             "enable_retry": retry,
-            "significance_level": significance,
+            "risk_level": risk,
+            "learning_rate": learning_rate,
         }
         if mode == "heuristic_adaptive":
             server_cfg["calibration_schedule"] = []
@@ -135,19 +146,11 @@ def main(mode, load, retry: bool, parallel: bool, significance: float):
                 if i == len(instances) - 1
                 else [
                     {
-                        "start_delay_ms": r * CALIBRATION_DURATION * 1000,
+                        "start_delay_ms": (WARMUP_DURATION + r * CALIBRATION_DURATION)
+                        * 1000,
                         "duration_ms": CALIBRATION_DURATION * 1000,
                     }
                     for r in range(CALIBRATION_ROUNDS)
-                ]
-                if parallel
-                else [
-                    {
-                        "start_delay_ms": r * CALIBRATION_DURATION * 1000,
-                        "duration_ms": CALIBRATION_DURATION * 1000,
-                    }
-                    for r in range(CALIBRATION_ROUNDS)
-                    if r % (len(instances) - 1) == i
                 ]
             )
         with open(f"configs/server_{name}.toml", "w") as f:
@@ -157,7 +160,8 @@ def main(mode, load, retry: bool, parallel: bool, significance: float):
             "server_id": node_id,
             "server_address": f"127.0.0.1:{PORT}",
             "read_ratio": READ_RATIO,
-            "max_duration_sec": EXPERIMENT_DURATION,
+            "max_duration_sec": WARMUP_DURATION + EXPERIMENT_DURATION,
+            "seed": node_id,
             "summary_filepath": f"{OUTPUT_DIR}/client_{node_id}_summary.log",
             "output_filepath": f"{OUTPUT_DIR}/client_{node_id}.log",
             "load_pattern": LOAD_PATTERNS[load],
@@ -182,7 +186,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "load",
         type=str,
-        choices=["cyclic"],
+        choices=["cyclic", "localevents"],
         help="Choose the client load pattern",
     )
     parser.add_argument(
@@ -192,16 +196,16 @@ if __name__ == "__main__":
         help="Paxos proposer have retrying enabled",
     )
     parser.add_argument(
-        "--parallel",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Calibration done in parallel",
-    )
-    parser.add_argument(
-        "--significance",
+        "--risk",
         type=float,
         default=0.1,
-        help="Significance level for calibration",
+        help="Risk level for calibration",
+    )
+    parser.add_argument(
+        "--learning_rate",
+        type=float,
+        default=0.005,
+        help="Learning rate for online calibration",
     )
 
     args = parser.parse_args()
@@ -209,6 +213,6 @@ if __name__ == "__main__":
         mode=args.mode,
         load=args.load,
         retry=args.retry,
-        parallel=args.parallel,
-        significance=args.significance,
+        risk=args.risk,
+        learning_rate=args.learning_rate,
     )

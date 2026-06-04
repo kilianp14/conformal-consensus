@@ -342,6 +342,16 @@ impl TestSystem {
         }
     }
 
+    /// Takes (prints) the fast-path stats of all nodes
+    #[cfg(feature = "adaptive")]
+    pub fn take_fast_path_stats_all_nodes(&self) {
+        for node in &self.nodes {
+            node.1.on_definition(|comp| {
+                comp.paxos.take_fast_path_stats();
+            });
+        }
+    }
+
     fn set_executor_for_threads(threads: usize, conf: &mut KompactConfig) {
         if threads <= 32 {
             conf.executor(crossbeam_workstealing_pool::small_pool)

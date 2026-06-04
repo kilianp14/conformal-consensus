@@ -5,8 +5,8 @@ MACHINE_TYPE="e2-standard-4"
 IMAGE_FAMILY="debian-13"
 IMAGE_PROJECT="debian-cloud"
 
-# Finland, Madrid, Netherlands, Warsaw, Frankfurt
-REGIONS=("europe-north1" "europe-southwest1" "europe-west4" "europe-central2" "europe-west3")
+# Stockholm, Madrid, Netherlands, Warsaw, Frankfurt
+REGIONS=("europe-north2" "europe-southwest1" "europe-west4" "europe-central2" "europe-west3")
 
 for REGION in "${REGIONS[@]}"; do
   INSTANCE_NAME="node-eu-${REGION}"

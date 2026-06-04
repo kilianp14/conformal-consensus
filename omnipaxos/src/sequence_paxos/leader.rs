@@ -79,7 +79,7 @@ where
             );
             if received_majority {
                 self.state = (Role::Leader, Phase::Accept);
-                let status = AcceptStatus::OpAccepted;
+                let status = AcceptStatus::LeaderAccept;
                 let decided_idx = self.internal_storage.get_decided_idx();
                 let (max_promise_sync, new_decided_idx) =
                     self.leader_state.take_my_log_sync(decided_idx, status);
@@ -129,7 +129,7 @@ where
     }
 
     pub(crate) fn op_accept_entry_leader(&mut self, entry: T) {
-        let accept_status = AcceptStatus::OpAccepted;
+        let accept_status = AcceptStatus::LeaderAccept;
 
         // Add to storage
         let slot_idx = self
@@ -168,7 +168,7 @@ where
     pub(crate) fn handle_accepted(&mut self, accepted: Accepted<T>, from: NodeId) {
         // For followers (calibration)
         #[cfg(feature = "adaptive")]
-        if accepted.accept_status == AcceptStatus::TestAccepted {
+        if accepted.accept_status == AcceptStatus::TestAccept {
             if self.calibrating {
                 if let Some(index) =
                     self.test_proposals
@@ -183,7 +183,8 @@ where
                     // calibration data
                     if self.quorum.is_fast_quorum(self.test_proposals[index].3) {
                         let (_, _, features, _) = self.test_proposals.remove(index);
-                        self.calibration_data.push((features, Label::Success));
+                        self.conformal_mode_predictor
+                            .add_data_point(features, Label::Success);
                     }
                 }
             }
@@ -212,8 +213,8 @@ where
 
     fn handle_leader_action(&mut self, action: LeaderAction<T>) {
         match action {
-            LeaderAction::ProcessSlowPath(slot_idx, entry) => {
-                let accept_status = AcceptStatus::FpSlowAccepted;
+            LeaderAction::SlowPath(slot_idx, entry) => {
+                let accept_status = AcceptStatus::SlowAccept;
                 for pid in self.leader_state.get_promised_followers() {
                     let a = Accept {
                         n: self.leader_state.n_leader,
@@ -225,7 +226,15 @@ where
                     self.send_msg_to(pid, PaxosMsg::Accept(a));
                 }
                 self.internal_storage
-                    .insert_at_index(slot_idx, LogEntry::Undecided(entry, accept_status));
+                    .insert_at_index(slot_idx, LogEntry::Undecided(entry.clone(), accept_status));
+                let leader_action = self.leader_state.add_proposal(
+                    self.internal_storage.get_decided_idx(),
+                    self.pid,
+                    slot_idx,
+                    entry,
+                    accept_status,
+                );
+                self.handle_leader_action(leader_action);
             }
             LeaderAction::Decided(new_decided_entries, new_decided_index) => {
                 for (slot_idx, entry, accept_status) in new_decided_entries {

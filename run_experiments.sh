@@ -5,16 +5,10 @@ CLIENT_IMAGE="europe-docker.pkg.dev/conformal-consensus/docker-images-europe/cli
 GEO_REGION="${1:-europe}"
 
 EXPERIMENTS=(
-  "normal cyclic --retry --no-parallel 0.1"
-  "fast cyclic --retry --no-parallel 0.1"
-  "heuristic_adaptive cyclic --retry --no-parallel 0.1"
-  "crc_adaptive cyclic --retry --parallel 0.1"
-  "crc_adaptive cyclic --retry --no-parallel 0.1"
-  "normal cyclic --no-retry --no-parallel 0.1"
-  "fast cyclic --no-retry --no-parallel 0.1"
-  "heuristic_adaptive cyclic --no-retry --no-parallel 0.1"
-  "crc_adaptive cyclic --no-retry --parallel 0.1"
-  "crc_adaptive cyclic --no-retry --no-parallel 0.1"
+  "crc_adaptive localevents --no-retry 0.1 0.005"
+  "fast localevents --no-retry 0.1 0.005"
+  "normal localevents --no-retry 0.1 0.005"
+  "heuristic_adaptive localevents --no-retry 0.1 0.005"
 )
 
 echo "Fetching instances for region: $GEO_REGION..."
@@ -28,7 +22,7 @@ if [ -z "$INSTANCES" ]; then
 fi
 
 for EXP in "${EXPERIMENTS[@]}"; do
-  read -r MODE LOAD RETRY_FLAG PARALLEL_FLAG SIGNIFICANCE <<<"$EXP"
+  read -r MODE LOAD RETRY_FLAG RISK LR <<<"$EXP"
 
   if [ "$MODE" == "heuristic_adaptive" ] || [ "$MODE" == "crc_adaptive" ]; then
     SERVER_IMAGE_TAG="server-adaptive"
@@ -37,12 +31,12 @@ for EXP in "${EXPERIMENTS[@]}"; do
   fi
   SERVER_IMAGE="europe-docker.pkg.dev/conformal-consensus/docker-images-europe/$SERVER_IMAGE_TAG:latest"
 
-  RUN_ID="${MODE}_${LOAD}_${RETRY_FLAG//--/}_${PARALLEL_FLAG//--/}_sig${SIGNIFICANCE}"
+  RUN_ID="${MODE}_${LOAD}_${RETRY_FLAG//--/}_risk${RISK}_lr${LR}"
   echo "=========================================================================="
   echo "Starting Experiment: $RUN_ID"
   echo "=========================================================================="
 
-  python3 generate_configs.py "$MODE" "$LOAD" "$RETRY_FLAG" "$PARALLEL_FLAG" --significance "$SIGNIFICANCE"
+  python3 generate_configs.py "$MODE" "$LOAD" "$RETRY_FLAG" --risk "$RISK" --learning_rate "$LR"
 
   while IFS=',' read -r NAME ZONE <&3; do
     gcloud compute scp \

@@ -138,9 +138,12 @@ pub struct ServerConfig {
     #[cfg(feature = "logging")]
     #[cfg_attr(feature = "toml_config", serde(skip_deserializing))]
     pub custom_logger: Option<slog::Logger>,
-    /// significance level used for model calibraion in adaptive algorithm
+    /// risk level used for model calibraion in adaptive algorithm
     #[cfg(feature = "adaptive")]
-    pub significance_level: f64,
+    pub risk_level: f64,
+    /// learning rate for adaptive conformal inference
+    #[cfg(feature = "adaptive")]
+    pub learning_rate: f64,
 }
 
 impl ServerConfig {
@@ -158,8 +161,13 @@ impl ServerConfig {
         );
         #[cfg(feature = "adaptive")]
         valid_config!(
-            (0.0..=1.0).contains(&self.significance_level),
-            "significance level must be between 0 and 1"
+            (0.0..=1.0).contains(&self.risk_level),
+            "risk level must be between 0 and 1"
+        );
+        #[cfg(feature = "adaptive")]
+        valid_config!(
+            (0.0..=1.0).contains(&self.learning_rate),
+            "learning_rate must be between 0 and 1"
         );
         Ok(())
     }
@@ -180,7 +188,9 @@ impl Default for ServerConfig {
             #[cfg(feature = "logging")]
             custom_logger: None,
             #[cfg(feature = "adaptive")]
-            significance_level: 0.1,
+            risk_level: 0.1,
+            #[cfg(feature = "adaptive")]
+            learning_rate: 0.005,
         }
     }
 }

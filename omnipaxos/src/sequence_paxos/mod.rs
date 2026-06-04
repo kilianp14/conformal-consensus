@@ -30,7 +30,7 @@ mod utils;
 
 use messages::*;
 #[cfg(feature = "adaptive")]
-use predictor::{ConformalModePredictor, Features, Label};
+use predictor::{ConformalModePredictor, Features};
 
 /// Configuration for `SequencePaxos`.
 /// # Fields
@@ -51,7 +51,9 @@ pub(crate) struct SequencePaxosConfig {
     #[cfg(feature = "logging")]
     custom_logger: Option<Logger>,
     #[cfg(feature = "adaptive")]
-    significance_level: f64,
+    risk_level: f64,
+    #[cfg(feature = "adaptive")]
+    learning_rate: f64,
 }
 
 impl From<OmniPaxosConfig> for SequencePaxosConfig {
@@ -74,7 +76,9 @@ impl From<OmniPaxosConfig> for SequencePaxosConfig {
             #[cfg(feature = "logging")]
             custom_logger: config.server_config.custom_logger,
             #[cfg(feature = "adaptive")]
-            significance_level: config.server_config.significance_level,
+            risk_level: config.server_config.risk_level,
+            #[cfg(feature = "adaptive")]
+            learning_rate: config.server_config.learning_rate,
         }
     }
 }
@@ -95,6 +99,7 @@ where
     quorum: Quorum,
     leader_state: LeaderState<T>,
     cached_promise_message: Option<Promise<T>>,
+    // Retry or not retry if proposals fail to be appended
     retrying: bool,
     // Keeps track of sequence of accepts from leader where AcceptSync = 1
     current_seq_num: SequenceNumber,
@@ -107,16 +112,18 @@ where
     // Proposals currently in transit testing fast-path success with number of test accepted
     #[cfg(feature = "adaptive")]
     test_proposals: Vec<(SlotId, T, Features, usize)>,
+    // Switch in real-time between operating modes
     #[cfg(feature = "adaptive")]
     conformal_mode_predictor: ConformalModePredictor,
+    // For computing features (fast quorum latency and number of accepts received)
     #[cfg(feature = "adaptive")]
     fast_quorum_latency_in_s: Option<f64>,
     #[cfg(feature = "adaptive")]
     incoming_proposals_timestamps: VecDeque<Instant>,
-    #[cfg(feature = "adaptive")]
-    calibration_data: Vec<(Features, Label)>,
+    // If true labels should be collected (test accepts)
     #[cfg(feature = "adaptive")]
     calibrating: bool,
+    // Stats about fast-path utilization and success
     #[cfg(feature = "logging")]
     fast_path_stats: FastPathStats,
     #[cfg(feature = "logging")]
@@ -165,13 +172,16 @@ where
             #[cfg(feature = "adaptive")]
             test_proposals: Vec::new(),
             #[cfg(feature = "adaptive")]
-            conformal_mode_predictor: ConformalModePredictor::new(config.significance_level),
+            conformal_mode_predictor: ConformalModePredictor::new(
+                config.risk_level,
+                config.learning_rate,
+                #[cfg(feature = "logging")]
+                logger.clone(),
+            ),
             #[cfg(feature = "adaptive")]
             fast_quorum_latency_in_s: None,
             #[cfg(feature = "adaptive")]
             incoming_proposals_timestamps: VecDeque::with_capacity(50000),
-            #[cfg(feature = "adaptive")]
-            calibration_data: Vec::with_capacity(10000),
             #[cfg(feature = "adaptive")]
             calibrating: false,
             #[cfg(feature = "logging")]
@@ -288,7 +298,7 @@ where
                         seq_num: SequenceNumber::default(), // not needed for fast path
                         entry: entry.clone(),
                         slot_idx,
-                        accept_status: AcceptStatus::TestAccepted,
+                        accept_status: AcceptStatus::TestAccept,
                     };
                     self.send_to_all_peers(PaxosMsg::Accept(acc));
                     self.test_proposals
@@ -338,120 +348,14 @@ where
     /// Start calibration
     #[cfg(feature = "adaptive")]
     pub(crate) fn start_calibration(&mut self) {
-        self.calibrating = true;
+        self.calibrating = true; // For initiating test accepts and collecting true labels
+        self.conformal_mode_predictor.start_data_collection();
     }
 
     /// End calibration
     #[cfg(feature = "adaptive")]
     pub(crate) fn end_calibration(&mut self) {
-        if !self.calibrating {
-            #[cfg(feature = "logging")]
-            slog::warn!(
-                self.logger,
-                "Not currently calibrating. Cannot end calibration"
-            );
-            return;
-        }
-        match self
-            .conformal_mode_predictor
-            .calibrate(&self.calibration_data)
-        {
-            Ok((_l_hat, _emp_risk)) => {
-                #[cfg(feature = "logging")]
-                {
-                    struct Stats {
-                        mean: f64,
-                        median: f64,
-                        std_dev: f64,
-                        min: f64,
-                        max: f64,
-                    }
-
-                    let compute_stats = |mut values: Vec<f64>| -> Stats {
-                        if values.is_empty() {
-                            return Stats {
-                                mean: 0.0,
-                                median: 0.0,
-                                std_dev: 0.0,
-                                min: 0.0,
-                                max: 0.0,
-                            };
-                        }
-
-                        let count = values.len() as f64;
-                        let mut sum = 0.0;
-                        let mut sum_of_squares = 0.0;
-                        let mut min = f64::INFINITY;
-                        let mut max = f64::NEG_INFINITY;
-
-                        for &val in &values {
-                            sum += val;
-                            sum_of_squares += val * val;
-                            if val < min {
-                                min = val;
-                            }
-                            if val > max {
-                                max = val;
-                            }
-                        }
-
-                        let mean = sum / count;
-                        let variance = ((sum_of_squares / count) - (mean * mean)).max(0.0);
-                        let std_dev = variance.sqrt();
-
-                        values.sort_by(|a, b| a.total_cmp(b));
-                        let mid = values.len() / 2;
-                        let median = if values.len().is_multiple_of(2) {
-                            (values[mid - 1] + values[mid]) / 2.0
-                        } else {
-                            values[mid]
-                        };
-
-                        Stats {
-                            mean,
-                            median,
-                            std_dev,
-                            min,
-                            max,
-                        }
-                    };
-
-                    let latencies: Vec<f64> = self
-                        .calibration_data
-                        .iter()
-                        .map(|(f, _)| f.fast_quorum_latency_in_s)
-                        .collect();
-
-                    let proposals: Vec<f64> = self
-                        .calibration_data
-                        .iter()
-                        .map(|(f, _)| f.other_nodes_proposals_per_s)
-                        .collect();
-
-                    let l_stats = compute_stats(latencies);
-                    let p_stats = compute_stats(proposals);
-
-                    slog::info!(
-                        self.logger,
-                        "Node {}: Calibration successful on calibration set of size {}! Lambda: {}. Empirical risk on calibration data: {}. \
-                        Latency Stats -> Mean: {:.4}s, Median: {:.4}s, StdDev: {:.4}s, Min: {:.4}s, Max: {:.4}s. \
-                        Proposals Stats -> Mean: {:.4}/s, Median: {:.4}/s, StdDev: {:.4}/s, Min: {:.4}/s, Max: {:.4}/s.",
-                        self.pid,
-                        self.calibration_data.len(),
-                        _l_hat,
-                        _emp_risk,
-                        l_stats.mean, l_stats.median, l_stats.std_dev, l_stats.min, l_stats.max,
-                        p_stats.mean, p_stats.median, p_stats.std_dev, p_stats.min, p_stats.max
-                    );
-                }
-                self.calibration_data.clear();
-            }
-            Err(_e) => {
-                #[cfg(feature = "logging")]
-                slog::warn!(self.logger, "Node {}: Calibration failed: {}", self.pid, _e);
-            }
-        }
-        self.calibrating = false;
+        self.conformal_mode_predictor.calibrate();
     }
 
     /// Handle an incoming message.
@@ -473,17 +377,17 @@ where
                 #[cfg(feature = "adaptive")]
                 {
                     // Track proposals from other nodes
-                    if acc.accept_status == AcceptStatus::FpFastAccepted
-                        || acc.accept_status == AcceptStatus::OpAccepted
+                    if acc.accept_status == AcceptStatus::FastAccept
+                        || acc.accept_status == AcceptStatus::LeaderAccept
                     {
                         self.incoming_proposals_timestamps.push_back(Instant::now());
                     }
                 }
                 match acc.accept_status {
-                    AcceptStatus::FpFastAccepted => self.handle_fast_accept(acc),
-                    AcceptStatus::OpAccepted => self.handle_omnipaxos_accept(acc),
-                    AcceptStatus::FpSlowAccepted => self.handle_slow_accept(acc),
-                    AcceptStatus::TestAccepted => self.handle_test_accept(acc, m.from),
+                    AcceptStatus::FastAccept => self.handle_fast_accept(acc),
+                    AcceptStatus::LeaderAccept => self.handle_omnipaxos_accept(acc),
+                    AcceptStatus::SlowAccept => self.handle_slow_accept(acc),
+                    AcceptStatus::TestAccept => self.handle_test_accept(acc, m.from),
                 }
             }
             PaxosMsg::Accepted(accepted) => self.handle_accepted(accepted, m.from),

@@ -82,7 +82,7 @@ where
         {
             self.fast_path_stats.fast_path_attempts += 1;
         }
-        let accept_status = AcceptStatus::FpFastAccepted;
+        let accept_status = AcceptStatus::FastAccept;
         // Add to storage
         let slot_idx = self
             .internal_storage
@@ -240,7 +240,8 @@ where
                     .test_proposals
                     .extract_if(.., |(i, _, _, _)| *i <= dec.slot_idx);
                 for (_, _, features, _) in tested_elements {
-                    self.calibration_data.push((features, Label::NoSuccess));
+                    self.conformal_mode_predictor
+                        .add_data_point(features, Label::NoSuccess);
                 }
             }
             // Check if this node proposed something for this slot
@@ -249,7 +250,7 @@ where
                 let own_entry = own_proposed_entry_at_slot;
                 #[cfg(feature = "adaptive")]
                 let (own_entry, features) = own_proposed_entry_at_slot;
-                if dec.accept_status == AcceptStatus::FpFastAccepted && own_entry == dec.entry {
+                if dec.accept_status == AcceptStatus::FastAccept && own_entry == dec.entry {
                     // Update fast-path success meta-data
                     #[cfg(feature = "logging")]
                     {
@@ -258,7 +259,8 @@ where
                     #[cfg(feature = "adaptive")]
                     if let Some(features) = features {
                         if self.calibrating {
-                            self.calibration_data.push((features, Label::Success));
+                            self.conformal_mode_predictor
+                                .add_data_point(features, Label::Success);
                         }
                     }
                 } else {
@@ -270,7 +272,8 @@ where
                     #[cfg(feature = "adaptive")]
                     if let Some(features) = features {
                         if self.calibrating {
-                            self.calibration_data.push((features, Label::NoSuccess));
+                            self.conformal_mode_predictor
+                                .add_data_point(features, Label::NoSuccess);
                         }
                     }
                 }

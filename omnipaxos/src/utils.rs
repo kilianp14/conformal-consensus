@@ -21,13 +21,13 @@ pub trait Entry: Clone + Debug + Eq {}
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum AcceptStatus {
     /// Accepted via OmniPaxos
-    OpAccepted,
+    LeaderAccept,
     /// Accepted via the fast path of FastPaxos
-    FpFastAccepted,
+    FastAccept,
     /// Accepted via the slow path of FastPaxos
-    FpSlowAccepted,
+    SlowAccept,
     /// Only for testing if fast path would have succeeded
-    TestAccepted,
+    TestAccept,
 }
 
 /// The entry read in the log.

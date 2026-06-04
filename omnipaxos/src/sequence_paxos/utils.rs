@@ -35,13 +35,13 @@ enum SlotResult<T> {
     // A quorum has not voted yet
     // or quorum has voted uniformly with fast accepts, but a fast quorum has not been achieved yet
     Pending,
-    // A quorum has voted, but vote is not uniform
-    SlowPath(T),
+    // Collision happened that has to be resolved
+    Collision(T),
     // A majority quorum has voted uniformly using OpAccepted
     // a fast quorum has voted uniformly using FpFastAccepted
     // or a majority has voted uniformly using FpSlowAccepted.
     // Way of acceptance is in the accept status
-    Decided(T, AcceptStatus),
+    Chosen(T, AcceptStatus),
 }
 
 #[derive(Debug, Clone)]
@@ -49,7 +49,7 @@ pub(crate) enum LeaderAction<T> {
     /// No significant state change occurred.
     None,
     /// The slot has transitioned to a Slow Path; the leader must re-propose.
-    ProcessSlowPath(SlotId, T),
+    SlowPath(SlotId, T),
     /// One or more slots have been finalized using an acceptance method. Contains new decisions and new decided_idx
     Decided(Vec<(SlotId, T, AcceptStatus)>, SlotId),
 }
@@ -297,15 +297,15 @@ where
         // State Logic
         match slot_result {
             // Only trigger the "Decided" action if we just decided at the current decided_idx
-            SlotResult::Decided(_, _) if slot_idx == decided_idx => {
+            SlotResult::Chosen(_, _) if slot_idx == decided_idx => {
                 self.slot_results.insert(slot_idx, slot_result);
                 let mut newly_decided = Vec::new();
                 let mut current_idx = slot_idx;
 
                 // Drain contiguous decided slots
-                while let Some(SlotResult::Decided(_, _)) = self.slot_results.get(&current_idx) {
+                while let Some(SlotResult::Chosen(_, _)) = self.slot_results.get(&current_idx) {
                     // Now that we know it's a Decided variant, remove it to take ownership
-                    if let Some(SlotResult::Decided(entry, status)) =
+                    if let Some(SlotResult::Chosen(entry, status)) =
                         self.slot_results.remove(&current_idx)
                     {
                         newly_decided.push((current_idx, entry, status));
@@ -316,10 +316,10 @@ where
                 LeaderAction::Decided(newly_decided, current_idx)
             }
             // Only trigger slow path action if slot was previously pending
-            SlotResult::SlowPath(entry) if was_pending => {
+            SlotResult::Collision(entry) if was_pending => {
                 self.slot_results
-                    .insert(slot_idx, SlotResult::SlowPath(entry.clone()));
-                LeaderAction::ProcessSlowPath(slot_idx, entry.clone())
+                    .insert(slot_idx, SlotResult::Collision(entry.clone()));
+                LeaderAction::SlowPath(slot_idx, entry.clone())
             }
             _ => {
                 self.slot_results.insert(slot_idx, slot_result);
@@ -385,10 +385,10 @@ where
 
         counts.3 += 1; // Increment total
         match status {
-            AcceptStatus::OpAccepted => counts.0 += 1,
-            AcceptStatus::FpFastAccepted => counts.1 += 1,
-            AcceptStatus::FpSlowAccepted => counts.2 += 1,
-            AcceptStatus::TestAccepted => {
+            AcceptStatus::LeaderAccept => counts.0 += 1,
+            AcceptStatus::FastAccept => counts.1 += 1,
+            AcceptStatus::SlowAccept => counts.2 += 1,
+            AcceptStatus::TestAccept => {
                 panic!("Test Entry should not be in leader decision process")
             }
         }
@@ -403,13 +403,13 @@ where
     // Check if we can make a decision
     if let Some((entry, (op, fast, slow, _))) = winner.clone() {
         if quorum.is_majority_quorum(op) {
-            return SlotResult::Decided(entry, AcceptStatus::OpAccepted);
+            return SlotResult::Chosen(entry, AcceptStatus::LeaderAccept);
         }
         if quorum.is_fast_quorum(fast) {
-            return SlotResult::Decided(entry, AcceptStatus::FpFastAccepted);
+            return SlotResult::Chosen(entry, AcceptStatus::FastAccept);
         }
         if quorum.is_majority_quorum(slow) {
-            return SlotResult::Decided(entry, AcceptStatus::FpSlowAccepted);
+            return SlotResult::Chosen(entry, AcceptStatus::SlowAccept);
         }
     }
 
@@ -422,18 +422,20 @@ where
         // Calculate if a decision is still possible
         if quorum.is_fast_quorum(remaining_votes + fast)
             || quorum.is_majority_quorum(remaining_votes + op)
-            || slow > 0
         {
             // It is still possible to reach a decision if the
             // remaining nodes vote for this entry_id.
             // We could also initiate a slow path from this point since only one value
             // is possible once more than a fast quorum has voted
-            return SlotResult::SlowPath(e.to_owned());
+            return SlotResult::Pending;
+        }
+        if slow > 0 {
+            return SlotResult::Collision(e.to_owned());
         }
     }
 
     // Collision definitely happened, continue slow path with value that has the most votes
-    SlotResult::SlowPath(
+    SlotResult::Collision(
         winner
             .expect("no winner should not be possible at this point")
             .0,

@@ -93,7 +93,8 @@ num_clients = 1
 mode = "$MODE"
 output_filepath = "$LOG_DIR/server_$i.log"
 paxos_output_filepath = "$LOG_DIR/paxos_$i.log"
-significance_level = 0.1
+risk_level = 0.01
+learning_rate = 0.005
 enable_retry = false
 $CALIBRATION_BLOCK
 EOF
@@ -102,16 +103,18 @@ EOF
 server_id = $i
 server_address = "s$i:$SERVER_PORT"
 summary_filepath = "$LOG_DIR/client_summary_$i.log"
-output_filepath = "$LOG_DIR/client_output_$i.log"
+output_filepath = "$LOG_DIR/client_$i.log"
 max_duration_sec = 100
 read_ratio = 0.8
+seed = $i
 
 [load_pattern]
-type = "RegularBursts"
-base_rps = 5
+type = "RandomBursts"
+base_rps = 10
 burst_rps = 200
-interval_sec = 20
-decay_rate = 1
+avg_interval_sec = 10
+interval_std_dev_sec = 5
+decay_rate = 0.5
 jitter = 0.5
 EOF
 done
