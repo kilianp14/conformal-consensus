@@ -67,7 +67,9 @@ where
     // The sequence number of accepts for each follower
     follower_seq_nums: HashMap<NodeId, SequenceNumber>,
     // Stores proposals by slot and node
-    accept_meta: HashMap<SlotId, HashMap<NodeId, (T, AcceptStatus)>>,
+    // bool indicates whether the entry originally accepted by the node has been
+    // handled (slow-path, decided, or retried)
+    accept_meta: HashMap<SlotId, HashMap<NodeId, (T, AcceptStatus, bool)>>,
     /// Tracks the current state of each slot to detect transitions
     slot_results: HashMap<SlotId, SlotResult<T>>,
     // Quorums
@@ -264,6 +266,7 @@ where
         LogEntry::Empty
     }
 
+    // Return action to take and entries to retry
     pub(crate) fn add_proposal(
         &mut self,
         decided_idx: SlotId,
@@ -271,61 +274,88 @@ where
         slot_idx: SlotId,
         entry: T,
         accept_status: AcceptStatus,
-    ) -> LeaderAction<T> {
-        // Ignore proposals for slots that are already locally decided
-        if slot_idx < decided_idx {
-            return LeaderAction::None;
+    ) -> (LeaderAction<T>, Vec<T>) {
+        // Check if this slot is already fully resolved and garbage collected.
+        // If it is missing from accept_meta, it means all nodes have already proposed and it's safe to ignore (no retrying needed)
+        if slot_idx < decided_idx && !self.accept_meta.contains_key(&slot_idx) {
+            return (LeaderAction::None, vec![]);
         }
-        self.accept_meta
-            .entry(slot_idx)
-            .or_default()
-            .insert(pid, (entry, accept_status));
+        let proposals = self.accept_meta.entry(slot_idx).or_default();
+        proposals.insert(pid, (entry, accept_status, false));
 
-        // Check if slot is pending to avoid initiaing slow paths more than once
         let was_pending = matches!(
             self.slot_results.get(&slot_idx),
             None | Some(SlotResult::Pending)
         );
+        let slot_result = compute_propose_result(proposals, &self.quorum);
 
-        // Compute slot result
-        let slot_proposals = self
-            .accept_meta
-            .get(&slot_idx)
-            .expect("There should never be no proposals");
-        let slot_result = compute_propose_result(slot_proposals, &self.quorum);
-
-        // State Logic
+        let mut action = LeaderAction::None;
         match slot_result {
-            // Only trigger the "Decided" action if we just decided at the current decided_idx
-            SlotResult::Chosen(_, _) if slot_idx == decided_idx => {
-                self.slot_results.insert(slot_idx, slot_result);
-                let mut newly_decided = Vec::new();
-                let mut current_idx = slot_idx;
-
-                // Drain contiguous decided slots
-                while let Some(SlotResult::Chosen(_, _)) = self.slot_results.get(&current_idx) {
-                    // Now that we know it's a Decided variant, remove it to take ownership
-                    if let Some(SlotResult::Chosen(entry, status)) =
-                        self.slot_results.remove(&current_idx)
-                    {
-                        newly_decided.push((current_idx, entry, status));
-                        self.accept_meta.remove(&current_idx);
+            SlotResult::Chosen(ref winner, status) => {
+                self.slot_results
+                    .insert(slot_idx, SlotResult::Chosen(winner.clone(), status));
+                // Only trigger the "Decided" action if we just decided at the current decided_idx
+                if slot_idx == decided_idx {
+                    let mut newly_decided = Vec::new();
+                    let mut current_idx = slot_idx;
+                    // Drain contiguous decided slots
+                    while let Some(SlotResult::Chosen(e, s)) = self.slot_results.get(&current_idx) {
+                        newly_decided.push((current_idx, e.clone(), *s));
                         current_idx += 1;
                     }
+                    action = LeaderAction::Decided(newly_decided, current_idx);
                 }
-                LeaderAction::Decided(newly_decided, current_idx)
             }
-            // Only trigger slow path action if slot was previously pending
-            SlotResult::Collision(entry) if was_pending => {
+            SlotResult::Collision(ref winner) => {
                 self.slot_results
-                    .insert(slot_idx, SlotResult::Collision(entry.clone()));
-                LeaderAction::SlowPath(slot_idx, entry.clone())
+                    .insert(slot_idx, SlotResult::Collision(winner.clone()));
+                // Only trigger slow path action if slot was previously pending
+                if was_pending {
+                    action = LeaderAction::SlowPath(slot_idx, winner.clone());
+                }
             }
-            _ => {
-                self.slot_results.insert(slot_idx, slot_result);
-                LeaderAction::None
+            SlotResult::Pending => {
+                self.slot_results.insert(slot_idx, SlotResult::Pending);
             }
         }
+
+        // Extract any unhandled entries that do not match the winner
+        let mut to_retry = Vec::new();
+        if let Some(winner) = match self.slot_results.get(&slot_idx) {
+            Some(SlotResult::Chosen(w, _)) | Some(SlotResult::Collision(w)) => Some(w),
+            _ => None,
+        } {
+            let proposals_mut = self.accept_meta.get_mut(&slot_idx).unwrap();
+            for (e, _status, handled) in proposals_mut.values_mut() {
+                if e != winner && !*handled {
+                    *handled = true; // Mark as handled to prevent duplicate retries
+                    to_retry.push(e.clone());
+                }
+            }
+        }
+
+        // GC Case A: The current packet completes the votes for an already decided slot
+        if slot_idx < decided_idx {
+            if let Some(proposals) = self.accept_meta.get(&slot_idx) {
+                if proposals.len() == self.quorum.total_nodes {
+                    self.accept_meta.remove(&slot_idx);
+                    self.slot_results.remove(&slot_idx);
+                }
+            }
+        }
+        // GC Case B: Slots that are newly decided in this exact invocation
+        if let LeaderAction::Decided(ref newly_decided, _) = action {
+            for (idx, _, _) in newly_decided {
+                if let Some(proposals) = self.accept_meta.get(idx) {
+                    if proposals.len() == self.quorum.total_nodes {
+                        self.accept_meta.remove(idx);
+                        self.slot_results.remove(idx);
+                    }
+                }
+            }
+        }
+
+        (action, to_retry)
     }
 
     pub(crate) fn get_decided_idx(&self, pid: NodeId) -> Option<usize> {
@@ -358,7 +388,7 @@ where
 }
 
 fn compute_propose_result<T>(
-    proposals: &HashMap<NodeId, (T, AcceptStatus)>,
+    proposals: &HashMap<NodeId, (T, AcceptStatus, bool)>,
     quorum: &Quorum,
 ) -> SlotResult<T>
 where
@@ -375,7 +405,7 @@ where
     let mut vote_counts: Vec<(&T, (usize, usize, usize, usize))> =
         Vec::with_capacity(quorum.total_nodes);
 
-    for (entry, status) in proposals.values() {
+    for (entry, status, _) in proposals.values() {
         let counts = if let Some(existing) = vote_counts.iter_mut().find(|(val, _)| *val == entry) {
             &mut existing.1
         } else {

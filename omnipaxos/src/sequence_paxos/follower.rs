@@ -98,8 +98,6 @@ where
         };
         self.send_to_all_peers(PaxosMsg::Accept(acc));
 
-        #[cfg(not(feature = "adaptive"))]
-        self.pending_proposals.insert(slot_idx, entry.clone());
         #[cfg(feature = "adaptive")]
         self.pending_proposals
             .insert(slot_idx, (entry.clone(), Some(features)));
@@ -245,10 +243,8 @@ where
                 }
             }
             // Check if this node proposed something for this slot
+            #[cfg(feature = "adaptive")]
             if let Some(own_proposed_entry_at_slot) = self.pending_proposals.remove(&dec.slot_idx) {
-                #[cfg(not(feature = "adaptive"))]
-                let own_entry = own_proposed_entry_at_slot;
-                #[cfg(feature = "adaptive")]
                 let (own_entry, features) = own_proposed_entry_at_slot;
                 if dec.accept_status == AcceptStatus::FastAccept && own_entry == dec.entry {
                     // Update fast-path success meta-data
@@ -276,10 +272,6 @@ where
                                 .add_data_point(features, Label::NoSuccess);
                         }
                     }
-                }
-                // Retry mechanic
-                if self.retrying && own_entry != dec.entry {
-                    self.append(own_entry);
                 }
             }
             self.internal_storage.insert_at_index(

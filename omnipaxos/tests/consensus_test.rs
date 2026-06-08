@@ -63,6 +63,7 @@ fn consensus_test() {
     check_quorum(&logs, quorum_size, &vec_proposals);
     check_validity(&logs, &vec_proposals);
     check_consistent_log_prefixes(&logs);
+    #[cfg(feature = "adaptive")]
     sys.take_fast_path_stats_all_nodes();
 
     // Graceful Shutdown

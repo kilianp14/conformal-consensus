@@ -1,21 +1,20 @@
+#[cfg(feature = "adaptive")]
+use crate::sequence_paxos::utils::SlotId;
 #[cfg(feature = "logging")]
 use crate::utils::{create_logger, FastPathStats};
 use crate::{
-    sequence_paxos::{
-        log::MemoryStorage,
-        utils::{LeaderState, SlotId},
-    },
+    sequence_paxos::{log::MemoryStorage, utils::LeaderState},
     utils::{AcceptStatus, Ballot, Entry, Mode, NodeId, Phase, Quorum, Role, SequenceNumber},
     OmniPaxosConfig,
 };
 #[cfg(feature = "logging")]
 use slog::{info, Logger};
+use std::fmt::Debug;
 #[cfg(feature = "logging")]
 use std::mem;
-use std::{collections::HashMap, fmt::Debug};
 #[cfg(feature = "adaptive")]
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     time::{Duration, Instant},
 };
 
@@ -103,9 +102,6 @@ where
     retrying: bool,
     // Keeps track of sequence of accepts from leader where AcceptSync = 1
     current_seq_num: SequenceNumber,
-    // Proposals of this node currently in transit
-    #[cfg(not(feature = "adaptive"))]
-    pending_proposals: HashMap<SlotId, T>,
     // Proposals currently in transit with current features
     #[cfg(feature = "adaptive")]
     pending_proposals: HashMap<SlotId, (T, Option<Features>)>,
@@ -162,13 +158,14 @@ where
             mode: config.mode,
             peers,
             state: (Role::Follower, Phase::None),
-            pending_proposals: HashMap::new(),
             outgoing,
             quorum,
             leader_state: LeaderState::<T>::with(leader, quorum),
             cached_promise_message: None,
             current_seq_num: SequenceNumber::default(),
             retrying: config.enable_retry,
+            #[cfg(feature = "adaptive")]
+            pending_proposals: HashMap::new(),
             #[cfg(feature = "adaptive")]
             test_proposals: Vec::new(),
             #[cfg(feature = "adaptive")]

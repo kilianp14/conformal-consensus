@@ -136,8 +136,6 @@ where
             .internal_storage
             .add_entry(LogEntry::Undecided(entry.clone(), accept_status));
 
-        #[cfg(not(feature = "adaptive"))]
-        self.pending_proposals.insert(slot_idx, entry.clone());
         #[cfg(feature = "adaptive")]
         self.pending_proposals
             .insert(slot_idx, (entry.clone(), None));
@@ -155,14 +153,15 @@ where
         }
 
         // Add own proposal
-        let leader_action = self.leader_state.add_proposal(
+        let (leader_action, _) = self.leader_state.add_proposal(
             self.internal_storage.get_decided_idx(),
             self.pid,
             slot_idx,
             entry,
             accept_status,
         );
-        self.handle_leader_action(leader_action);
+        // Will never result in additional retries
+        self.handle_leader_action(leader_action, vec![]);
     }
 
     pub(crate) fn handle_accepted(&mut self, accepted: Accepted<T>, from: NodeId) {
@@ -191,7 +190,7 @@ where
             return;
         }
         if accepted.n == self.leader_state.n_leader && self.state == (Role::Leader, Phase::Accept) {
-            let leader_action = self.leader_state.add_proposal(
+            let (leader_action, to_retry) = self.leader_state.add_proposal(
                 self.internal_storage.get_decided_idx(),
                 from,
                 accepted.slot_idx,
@@ -207,11 +206,11 @@ where
                 accepted.slot_idx,
                 leader_action
             );
-            self.handle_leader_action(leader_action);
+            self.handle_leader_action(leader_action, to_retry);
         }
     }
 
-    fn handle_leader_action(&mut self, action: LeaderAction<T>) {
+    fn handle_leader_action(&mut self, action: LeaderAction<T>, to_retry: Vec<T>) {
         match action {
             LeaderAction::SlowPath(slot_idx, entry) => {
                 let accept_status = AcceptStatus::SlowAccept;
@@ -227,14 +226,15 @@ where
                 }
                 self.internal_storage
                     .insert_at_index(slot_idx, LogEntry::Undecided(entry.clone(), accept_status));
-                let leader_action = self.leader_state.add_proposal(
+                let (leader_action, _) = self.leader_state.add_proposal(
                     self.internal_storage.get_decided_idx(),
                     self.pid,
                     slot_idx,
                     entry,
                     accept_status,
                 );
-                self.handle_leader_action(leader_action);
+                // Will never result in additional retries
+                self.handle_leader_action(leader_action, vec![]);
             }
             LeaderAction::Decided(new_decided_entries, new_decided_index) => {
                 for (slot_idx, entry, accept_status) in new_decided_entries {
@@ -248,24 +248,17 @@ where
                         };
                         self.send_msg_to(pid, PaxosMsg::Decide(d));
                     }
-                    if let Some(own_proposed_entry_at_slot) =
-                        self.pending_proposals.remove(&slot_idx)
-                    {
-                        #[cfg(not(feature = "adaptive"))]
-                        let own_prop_entry = own_proposed_entry_at_slot;
-                        #[cfg(feature = "adaptive")]
-                        let own_prop_entry = own_proposed_entry_at_slot.0;
-                        if self.retrying && own_prop_entry != entry {
-                            // The slot was taken by another entry; retry our proposal
-                            self.append(own_prop_entry);
-                        }
-                    }
                     self.internal_storage
                         .insert_at_index(slot_idx, LogEntry::Decided(entry, accept_status));
                 }
                 self.internal_storage.set_decided_idx(new_decided_index);
             }
             LeaderAction::None => {}
+        }
+        if self.retrying {
+            for entry in to_retry {
+                self.append(entry);
+            }
         }
     }
 
