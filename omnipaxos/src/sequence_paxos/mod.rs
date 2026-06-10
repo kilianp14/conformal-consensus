@@ -1,5 +1,5 @@
 #[cfg(feature = "adaptive")]
-use crate::sequence_paxos::utils::SlotId;
+use crate::sequence_paxos::{predictor::Label, utils::SlotId};
 #[cfg(feature = "logging")]
 use crate::utils::{create_logger, FastPathStats};
 use crate::{
@@ -287,8 +287,8 @@ where
         if leader > 0 && self.pid != leader {
             #[cfg(feature = "adaptive")]
             {
-                // Send test accept to all peers
                 if self.calibrating {
+                    // Send test accept to all peers
                     let slot_idx = self.internal_storage.get_next_empty_slot();
                     let acc = Accept {
                         n: self.internal_storage.get_promise(),
@@ -300,6 +300,12 @@ where
                     self.send_to_all_peers(PaxosMsg::Accept(acc));
                     self.test_proposals
                         .push((slot_idx, entry.clone(), features, 1));
+                } else {
+                    // IMPORTANT: Only possible because loss function always gives zero when
+                    // NoSuccess was predicted -> Label does not matter for online calibration
+                    // So we dont have to do the test accepts here
+                    self.conformal_mode_predictor
+                        .add_data_point(features, Label::NoSuccess);
                 }
             }
             let pf = PaxosMsg::ProposalForward(entry.clone());
@@ -352,6 +358,7 @@ where
     /// End calibration
     #[cfg(feature = "adaptive")]
     pub(crate) fn end_calibration(&mut self) {
+        self.calibrating = false;
         self.conformal_mode_predictor.calibrate();
     }
 

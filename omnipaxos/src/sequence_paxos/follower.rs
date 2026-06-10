@@ -57,8 +57,11 @@ where
                 .append_suffix(accsync.log_sync.suffix, accsync.log_sync.sync_idx);
 
             // Accept all the undecided slots after the decided index
-            let mut slot_idx = accsync.decided_idx;
-            for log_entry in self.internal_storage.get_suffix(slot_idx) {
+            for (slot_idx, log_entry) in (accsync.decided_idx..).zip(
+                self.internal_storage
+                    .get_suffix(accsync.decided_idx)
+                    .into_iter(),
+            ) {
                 if let LogEntry::Undecided(entry, accept_status) = log_entry {
                     let accepted = Accepted {
                         n: accsync.n,
@@ -68,7 +71,6 @@ where
                     };
                     self.send_msg_to(from, PaxosMsg::Accepted(accepted));
                 }
-                slot_idx += 1;
             }
         }
     }
@@ -254,10 +256,8 @@ where
                     }
                     #[cfg(feature = "adaptive")]
                     if let Some(features) = features {
-                        if self.calibrating {
-                            self.conformal_mode_predictor
-                                .add_data_point(features, Label::Success);
-                        }
+                        self.conformal_mode_predictor
+                            .add_data_point(features, Label::Success);
                     }
                 } else {
                     // Update fast-path error meta-data
@@ -267,10 +267,8 @@ where
                     }
                     #[cfg(feature = "adaptive")]
                     if let Some(features) = features {
-                        if self.calibrating {
-                            self.conformal_mode_predictor
-                                .add_data_point(features, Label::NoSuccess);
-                        }
+                        self.conformal_mode_predictor
+                            .add_data_point(features, Label::NoSuccess);
                     }
                 }
             }
