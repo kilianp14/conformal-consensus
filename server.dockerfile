@@ -16,5 +16,4 @@ RUN cargo build --release -p benchmark --bin server
 FROM debian:trixie-slim AS runtime
 WORKDIR /app
 COPY --from=builder /app/target/release/server /usr/local/bin
-EXPOSE 8000
 ENTRYPOINT ["/usr/local/bin/server"]

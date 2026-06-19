@@ -1,9 +1,10 @@
-use crate::{configs::OmniPaxosKVConfig, database::Database, network::Network};
+use crate::{configs::ServerConfig, database::Database};
 use benchmark::common::{
-    ClientId, ClientMessage, ClusterMessage, Command, CommandId, KVCommand, ServerMessage,
-    Timestamp,
+    ClientId, ClusterMessage, Command, DaemonToServer, IPC_SOCKET_PATH, IpcFromDaemon, IpcToServer,
+    ServerMessage, ServerToDaemon, Timestamp, frame_ipc_server_side,
 };
 use chrono::Utc;
+use futures::{SinkExt, StreamExt, stream::ReadyChunks};
 use log::*;
 use omnipaxos::{
     OmniPaxos, OmniPaxosConfig,
@@ -11,22 +12,25 @@ use omnipaxos::{
     utils::{AcceptStatus, LogEntry, NodeId},
 };
 use std::{fs::File, io::Write, time::Duration};
+use tokio::net::UnixStream;
 use tokio::signal::unix::{SignalKind, signal};
 
 const NETWORK_BATCH_SIZE: usize = 100;
 const LEADER_WAIT: Duration = Duration::from_secs(1);
 const ELECTION_TIMEOUT: Duration = Duration::from_secs(1);
-const SEND_OUTGOING_MESSAGES_INTERVAL: Duration = Duration::from_millis(1);
+const GET_SYSTEM_INFO_INTERVAL: Duration = Duration::from_secs(10);
 
 pub struct OmniPaxosServer {
     id: NodeId,
     database: Database,
-    network: Network,
+    ipc_rx: ReadyChunks<IpcFromDaemon>,
+    ipc_tx: IpcToServer,
     omnipaxos: OmniPaxos<Command>,
     current_decided_idx: usize,
     omnipaxos_msg_buffer: Vec<Message<Command>>,
-    config: OmniPaxosKVConfig,
+    config: ServerConfig,
     peers: Vec<NodeId>,
+    #[cfg(feature = "adaptive")]
     start_time: Option<i64>,
     #[cfg(feature = "adaptive")]
     calibration_time: Option<i64>,
@@ -37,21 +41,38 @@ pub struct OmniPaxosServer {
 }
 
 impl OmniPaxosServer {
-    pub async fn new(config: OmniPaxosKVConfig) -> Self {
+    pub async fn new(config: ServerConfig) -> Self {
         let omnipaxos_config: OmniPaxosConfig = config.clone().into();
         let omnipaxos_msg_buffer = Vec::with_capacity(omnipaxos_config.server_config.buffer_size);
         let omnipaxos = omnipaxos_config.build().unwrap();
-        // Waits for client and server network connections to be established
-        let network = Network::new(config.clone(), NETWORK_BATCH_SIZE).await;
+
+        let ipc_stream = loop {
+            match UnixStream::connect(IPC_SOCKET_PATH).await {
+                Ok(stream) => break stream,
+                Err(e) => {
+                    warn!(
+                        "Waiting for network daemon at {}... ({})",
+                        IPC_SOCKET_PATH, e
+                    );
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+            }
+        };
+
+        info!("Connected to local network daemon.");
+        let (ipc_rx, ipc_tx) = frame_ipc_server_side(ipc_stream);
+
         OmniPaxosServer {
-            id: config.local.server_id,
+            id: config.server_id,
             database: Database::new(),
-            network,
+            ipc_rx: ipc_rx.ready_chunks(NETWORK_BATCH_SIZE),
+            ipc_tx,
             omnipaxos,
             current_decided_idx: 0,
             omnipaxos_msg_buffer,
-            peers: config.get_peers(config.local.server_id),
+            peers: config.get_peers(config.server_id),
             config,
+            #[cfg(feature = "adaptive")]
             start_time: None,
             #[cfg(feature = "adaptive")]
             calibration_time: None,
@@ -63,40 +84,33 @@ impl OmniPaxosServer {
     }
 
     pub async fn run(&mut self) {
-        // Save config to output file
         self.save_output().expect("Failed to write to file");
-        let mut client_msg_buf = Vec::with_capacity(NETWORK_BATCH_SIZE);
-        let mut cluster_msg_buf = Vec::with_capacity(NETWORK_BATCH_SIZE);
-        // We don't use Omnipaxos leader election at first and instead force a specific initial leader
-        self.establish_initial_leader(&mut cluster_msg_buf, &mut client_msg_buf)
-            .await;
+        self.establish_initial_leader().await;
 
-        let mut sigterm =
-            signal(SignalKind::terminate()).expect("Failed to install SIGTERM handler");
-        let mut sigint = signal(SignalKind::interrupt()).expect("Failed to install SIGINT handler");
+        let mut sigterm = signal(SignalKind::terminate()).expect("Failed install SIGTERM handler");
+        let mut sigint = signal(SignalKind::interrupt()).expect("Failed install SIGINT handler");
 
         // Main event loop with leader election
         let mut election_interval = tokio::time::interval(ELECTION_TIMEOUT);
-        let mut outgoing_interval = tokio::time::interval(SEND_OUTGOING_MESSAGES_INTERVAL);
+        let mut info_interval = tokio::time::interval(GET_SYSTEM_INFO_INTERVAL);
+
         loop {
             tokio::select! {
-            _ = sigint.recv() => {
-                info!("SIGINT received");
-                self.network.shutdown();
-                self.omnipaxos.take_fast_path_stats();
-                break;
-            }
-            _ = sigterm.recv() => {
-                info!("SIGTERM received");
-                self.network.shutdown();
-                self.omnipaxos.take_fast_path_stats();
-                break;
-            }
+                _ = sigint.recv() => {
+                    info!("SIGINT received");
+                    self.omnipaxos.take_fast_path_stats();
+                    break;
+                }
+                _ = sigterm.recv() => {
+                    info!("SIGTERM received");
+                    self.omnipaxos.take_fast_path_stats();
+                    break;
+                }
                 _ = election_interval.tick() => {
                     self.omnipaxos.tick();
                     #[cfg(feature = "adaptive")]
                     if self.calibration_time.is_some_and(|t| Utc::now().timestamp_millis() >= t) {
-                        let schedule = &self.config.local.calibration_schedule;
+                        let schedule = &self.config.calibration_schedule;
                         if !self.is_calibrating {
                             info!("{}: Triggering OmniPaxos calibration start {}/{}",
                                 self.id, self.calibration_index + 1, schedule.len());
@@ -125,61 +139,104 @@ impl OmniPaxosServer {
                         }
                     }
                 },
-                _ = outgoing_interval.tick() => {
-                    self.send_outgoing_msgs();
+                _ = info_interval.tick() => {
+                    #[cfg(feature = "adaptive")]
+                    {
+                        self.omnipaxos.get_current_latencies();
+                    }
                 },
-                _ = self.network.cluster_messages.recv_many(&mut cluster_msg_buf, NETWORK_BATCH_SIZE) => {
-                    self.handle_cluster_messages(&mut cluster_msg_buf).await;
-                },
-                _ = self.network.client_messages.recv_many(&mut client_msg_buf, NETWORK_BATCH_SIZE) => {
-                    self.handle_client_messages(&mut client_msg_buf).await;
+                msg_opt = self.ipc_rx.next() => {
+                    if let Some(msgs) = msg_opt {
+                        self.handle_ipc_messages(msgs).await;
+                    } else {
+                        error!("IPC connection to daemon closed unexpectedly. Shutting down.");
+                        break;
+                    }
                 },
             }
+            self.send_outgoing_msgs().await;
         }
     }
 
-    // Ensures cluster is connected and initial leader is promoted before returning.
-    // Once the leader is established it chooses a synchronization point which the
-    // followers relay to their clients to begin the experiment.
-    async fn establish_initial_leader(
-        &mut self,
-        cluster_msg_buffer: &mut Vec<(NodeId, ClusterMessage)>,
-        client_msg_buffer: &mut Vec<(ClientId, ClientMessage)>,
-    ) {
+    async fn establish_initial_leader(&mut self) {
         let mut leader_takeover_interval = tokio::time::interval(LEADER_WAIT);
         loop {
             tokio::select! {
-                _ = leader_takeover_interval.tick(), if self.config.cluster.initial_leader == self.id => {
+                _ = leader_takeover_interval.tick(), if self.config.initial_leader == self.id => {
                     if let Some((curr_leader, true)) = self.omnipaxos.get_current_leader() && curr_leader == self.id {
                         info!("{}: Leader fully initialized", self.id);
-                        let experiment_sync_start = (Utc::now() + Duration::from_secs(5)).timestamp_millis();
+                        let experiment_sync_start = (Utc::now() + Duration::from_secs(10)).timestamp_millis();
                         #[cfg(feature = "adaptive")]
-                        if let Some(first_window) = self.config.local.calibration_schedule.first() {
+                        if let Some(first_window) = self.config.calibration_schedule.first() {
                             self.calibration_time = Some(experiment_sync_start + first_window.start_delay_ms as i64);
                         }
-                        self.send_cluster_start_signals(experiment_sync_start);
-                        self.send_client_start_signals(experiment_sync_start);
+                        self.send_cluster_start_signals(experiment_sync_start).await;
+                        self.send_client_start_signals(experiment_sync_start).await;
                         break;
                     }
                     info!("{}: Attempting to take leadership", self.id);
                     self.omnipaxos.try_become_leader();
-                    self.send_outgoing_msgs();
                 },
-                _ = self.network.cluster_messages.recv_many(cluster_msg_buffer, NETWORK_BATCH_SIZE) => {
-                    let recv_start = self.handle_cluster_messages(cluster_msg_buffer).await;
-                    if recv_start {
-                        break;
+                msg_opt = self.ipc_rx.next() => {
+                    if let Some(msgs) = msg_opt {
+                        let recv_start = self.handle_ipc_messages(msgs).await;
+                        if recv_start {
+                            break;
+                        }
+                    } else {
+                        panic!("Daemon disconnected during initialization.");
                     }
                 },
-                _ = self.network.client_messages.recv_many(client_msg_buffer, NETWORK_BATCH_SIZE) => {
-                    self.handle_client_messages(client_msg_buffer).await;
-                },
             }
+            self.send_outgoing_msgs().await;
         }
     }
 
-    fn handle_decided_entries(&mut self) {
-        // TODO: Can use a read_raw here to avoid allocation
+    async fn handle_ipc_messages(
+        &mut self,
+        messages: Vec<Result<DaemonToServer, std::io::Error>>,
+    ) -> bool {
+        let mut received_start_signal = false;
+        for msg_res in messages {
+            match msg_res {
+                Ok(DaemonToServer::Cluster(from, message)) => {
+                    trace!("{}: Received cluster msg from {}", self.id, from);
+                    match message {
+                        ClusterMessage::OmniPaxosMessage(m) => {
+                            self.omnipaxos.handle_incoming(m);
+                            self.handle_decided_entries().await;
+                        }
+                        ClusterMessage::LeaderStartSignal(start_time) => {
+                            debug!("Received start message from peer {from}");
+                            received_start_signal = true;
+                            #[cfg(feature = "adaptive")]
+                            if let Some(first_window) = self.config.calibration_schedule.first() {
+                                self.start_time = Some(start_time);
+                                self.calibration_time =
+                                    Some(start_time + first_window.start_delay_ms as i64);
+                            }
+                            self.send_client_start_signals(start_time).await;
+                        }
+                    }
+                }
+                Ok(DaemonToServer::Client(from, (command_id, kv_command))) => {
+                    let command = Command {
+                        client_id: from,
+                        coordinator_id: self.id,
+                        id: command_id,
+                        kv_cmd: kv_command,
+                    };
+                    self.omnipaxos.append(command)
+                }
+                Err(e) => {
+                    error!("Error decoding IPC message from daemon: {:?}", e);
+                }
+            }
+        }
+        received_start_signal
+    }
+
+    async fn handle_decided_entries(&mut self) {
         let new_decided_idx = self.omnipaxos.get_decided_idx();
         if self.current_decided_idx < new_decided_idx {
             let decided_entries = self
@@ -195,11 +252,11 @@ impl OmniPaxosServer {
                     _ => unreachable!(),
                 })
                 .collect();
-            self.update_database_and_respond(decided_commands);
+            self.update_database_and_respond(decided_commands).await;
         }
     }
 
-    fn update_database_and_respond(&mut self, commands: Vec<(Command, AcceptStatus)>) {
+    async fn update_database_and_respond(&mut self, commands: Vec<(Command, AcceptStatus)>) {
         for (command, accept_status) in commands {
             let read = self.database.handle_command(command.kv_cmd);
             if command.coordinator_id == self.id {
@@ -209,86 +266,60 @@ impl OmniPaxosServer {
                     }
                     None => ServerMessage::Write(command.id, accept_status),
                 };
-                self.network.send_to_client(command.client_id, response);
+
+                let out_msg = ServerToDaemon::Client(command.client_id, response);
+                if let Err(e) = self.ipc_tx.feed(out_msg).await {
+                    error!("Failed to queue client response to daemon: {}", e);
+                }
             }
         }
+        let _ = self.ipc_tx.flush().await;
     }
 
-    fn send_outgoing_msgs(&mut self) {
+    async fn send_outgoing_msgs(&mut self) {
         self.omnipaxos
             .take_outgoing_messages(&mut self.omnipaxos_msg_buffer);
+
         for msg in self.omnipaxos_msg_buffer.drain(..) {
             let to = msg.get_receiver();
             let cluster_msg = ClusterMessage::OmniPaxosMessage(msg);
-            self.network.send_to_cluster(to, cluster_msg);
-        }
-    }
 
-    async fn handle_client_messages(&mut self, messages: &mut Vec<(ClientId, ClientMessage)>) {
-        for (from, (command_id, kv_command)) in messages.drain(..) {
-            self.append_to_log(from, command_id, kv_command)
-        }
-        self.send_outgoing_msgs();
-    }
+            trace!("{}: Sending cluster msg to {}", self.id, to);
+            let out_msg = ServerToDaemon::Cluster(to, cluster_msg);
 
-    async fn handle_cluster_messages(
-        &mut self,
-        messages: &mut Vec<(NodeId, ClusterMessage)>,
-    ) -> bool {
-        let mut received_start_signal = false;
-        for (from, message) in messages.drain(..) {
-            trace!("{}: Received {message:?}", self.id);
-            match message {
-                ClusterMessage::OmniPaxosMessage(m) => {
-                    self.omnipaxos.handle_incoming(m);
-                    self.handle_decided_entries();
-                }
-                ClusterMessage::LeaderStartSignal(start_time) => {
-                    debug!("Received start message from peer {from}");
-                    received_start_signal = true;
-                    #[cfg(feature = "adaptive")]
-                    if let Some(first_window) = self.config.local.calibration_schedule.first() {
-                        self.start_time = Some(start_time);
-                        self.calibration_time =
-                            Some(start_time + first_window.start_delay_ms as i64);
-                    }
-                    self.send_client_start_signals(start_time);
-                }
+            if let Err(e) = self.ipc_tx.feed(out_msg).await {
+                error!("Failed to queue cluster message to daemon: {}", e);
             }
         }
-        self.send_outgoing_msgs();
-        received_start_signal
+        if let Err(e) = self.ipc_tx.flush().await {
+            error!("Failed to flush messages to daemon: {}", e);
+        }
     }
 
-    fn append_to_log(&mut self, from: ClientId, command_id: CommandId, kv_command: KVCommand) {
-        let command = Command {
-            client_id: from,
-            coordinator_id: self.id,
-            id: command_id,
-            kv_cmd: kv_command,
-        };
-        self.omnipaxos.append(command)
-    }
-
-    fn send_cluster_start_signals(&mut self, start_time: Timestamp) {
+    async fn send_cluster_start_signals(&mut self, start_time: Timestamp) {
         for peer in &self.peers {
             debug!("Sending start message to peer {peer}");
             let msg = ClusterMessage::LeaderStartSignal(start_time);
-            self.network.send_to_cluster(*peer, msg);
+            let _ = self.ipc_tx.feed(ServerToDaemon::Cluster(*peer, msg)).await;
         }
+        let _ = self.ipc_tx.flush().await;
     }
 
-    fn send_client_start_signals(&mut self, start_time: Timestamp) {
-        for client_id in 1..self.config.local.num_clients as ClientId + 1 {
+    async fn send_client_start_signals(&mut self, start_time: Timestamp) {
+        for client_id in 1..self.config.num_clients as ClientId + 1 {
             debug!("Sending start message to client {client_id}");
             let msg = ServerMessage::StartSignal(start_time);
-            self.network.send_to_client(client_id, msg);
+            let _ = self
+                .ipc_tx
+                .feed(ServerToDaemon::Client(client_id, msg))
+                .await;
         }
+        let _ = self.ipc_tx.flush().await;
     }
 
     fn save_output(&mut self) -> Result<(), std::io::Error> {
         let config_json = serde_json::to_string_pretty(&self.config)?;
-        let mut output_file = File::create(&self.config.local.output_filepath)?;
+        let mut output_file = File::create(&self.config.output_filepath)?;
         output_file.write_all(config_json.as_bytes())?;
         output_file.flush()?;
         Ok(())

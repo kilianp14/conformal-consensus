@@ -54,7 +54,8 @@ NODE_ADDRS=""
 
 for ((i = 1; i <= $NUM_NODES; i++)); do
   NODE_IDS+="$i"
-  NODE_ADDRS+="\"s$i:$SERVER_PORT\""
+  # Format as [NodeId, "Address"]
+  NODE_ADDRS+="[$i, \"s$i:$SERVER_PORT\"]"
 
   if [ "$i" -lt "$NUM_NODES" ]; then
     NODE_IDS+=", "
@@ -64,9 +65,7 @@ done
 
 CLUSTER_FILE="$CONFIG_DIR/cluster.toml"
 cat <<EOF >"$CLUSTER_FILE"
-nodes = [$NODE_IDS]
 node_addrs = [$NODE_ADDRS]
-initial_leader = $NUM_NODES
 EOF
 
 for ((i = 1; i <= $NUM_NODES; i++)); do
@@ -86,10 +85,9 @@ SCHE_EOF
     )
   fi
   cat <<EOF >"$CONFIG_DIR/server_$i.toml"
-server_id = $i
-listen_address = "0.0.0.0"
-listen_port = $SERVER_PORT
 num_clients = 1
+nodes = [$NODE_IDS]
+initial_leader = $NUM_NODES
 mode = "$MODE"
 output_filepath = "$LOG_DIR/server_$i.log"
 paxos_output_filepath = "$LOG_DIR/paxos_$i.log"

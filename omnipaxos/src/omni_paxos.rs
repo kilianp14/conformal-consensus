@@ -14,6 +14,8 @@ use crate::{
 use serde::Deserialize;
 #[cfg(feature = "serde")]
 use serde::Serialize;
+#[cfg(feature = "adaptive")]
+use std::collections::HashMap;
 #[cfg(feature = "toml_config")]
 use std::fs;
 use std::{fmt::Debug, ops::RangeBounds};
@@ -298,6 +300,12 @@ where
     #[cfg(feature = "logging")]
     pub fn take_fast_path_stats(&mut self) -> FastPathStats {
         self.seq_paxos.take_fast_path_stats()
+    }
+
+    /// Get current latencies to other nodes
+    #[cfg(feature = "adaptive")]
+    pub fn get_current_latencies(&mut self) -> HashMap<NodeId, Option<f64>> {
+        self.ble.get_current_latencies()
     }
 
     /// Handles re-establishing a connection to a previously disconnected peer.

@@ -11,6 +11,7 @@ images=(
   "client:client.dockerfile"
   "server:server.dockerfile"
   "server-adaptive:server_adaptive.dockerfile"
+  "daemon:daemon.dockerfile"
 )
 
 for entry in "${images[@]}"; do
@@ -22,4 +23,3 @@ for entry in "${images[@]}"; do
 done
 
 echo "Done! All images pushed to ${REGISTRY_PATH}"
-

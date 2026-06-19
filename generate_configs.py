@@ -43,7 +43,6 @@ def to_toml(data, prefix="") -> str:
         elif isinstance(val, bool):
             return str(val).lower()
         elif isinstance(val, list):
-            # Fallback for simple arrays (strings, ints, etc.)
             items = [format_val(item) for item in val]
             return f"[{', '.join(items)}]"
         return str(val)
@@ -106,7 +105,6 @@ def main(mode, load, retry: bool, risk: float, learning_rate: float):
         print(inst["name"])
 
     nodes = [i + 1 for i in range(len(instances))]
-    # Use instance names as hostnames (GCP VPC DNS handles resolution)
     node_addrs = [
         f"{inst['name']}.{inst['zone'].split('/')[-1]}.c.conformal-consensus.internal:{PORT}"
         for inst in instances
@@ -124,11 +122,8 @@ def main(mode, load, retry: bool, risk: float, learning_rate: float):
         name = inst["name"]
         node_id = i + 1
 
-        # Server Config (Flattened structure for OmniPaxosKVConfig)
         server_cfg = {
             "server_id": node_id,
-            "listen_address": "0.0.0.0",
-            "listen_port": PORT,
             "num_clients": NUM_CLIENTS_PER_NODE,
             "output_filepath": f"{OUTPUT_DIR}/server_{node_id}.log",
             "paxos_output_filepath": f"{OUTPUT_DIR}/paxos_{node_id}.log",
@@ -140,7 +135,6 @@ def main(mode, load, retry: bool, risk: float, learning_rate: float):
         if mode == "heuristic_adaptive":
             server_cfg["calibration_schedule"] = []
         if mode == "crc_adaptive":
-            # No calibration for leader
             server_cfg["calibration_schedule"] = (
                 []
                 if i == len(instances) - 1
@@ -171,12 +165,9 @@ def main(mode, load, retry: bool, risk: float, learning_rate: float):
         with open(f"configs/client_{name}.toml", "w") as f:
             f.write(to_toml(client_cfg))
 
-    print(f"Generated {len(instances)} server and client configs in ./configs")
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-
     parser.add_argument(
         "mode",
         type=str,

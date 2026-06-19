@@ -6,36 +6,85 @@ x-common-server-variables: &common-server-variables
 services:
   # --- SERVERS ---
   s1:
-    image: omnipaxos-server
-    build: { context: ./, dockerfile: server.dockerfile }
+    image: network-daemon
+    build: { context: ./, dockerfile: daemon.dockerfile }
     container_name: s1
-    environment: *common-server-variables
+    environment:
+      <<: *common-server-variables
+      NODE_ID: "1"
+    volumes:
+      - ./configs/server_1.toml:/app/server-config.toml
+      - ./configs/cluster.toml:/app/cluster-config.toml
+      - s1-ipc:/tmp
+
+  s1-server:
+    image: server
+    build: { context: ./, dockerfile: server.dockerfile }
+    container_name: s1-server
+    environment:
+      <<: *common-server-variables
+      NODE_ID: "1"
     volumes:
       - ./configs/server_1.toml:/app/server-config.toml
       - ./configs/cluster.toml:/app/cluster-config.toml
       - ./results/:/app/results/
+      - s1-ipc:/tmp
+    depends_on:
+      - s1
 
-  s2: &server-base
-    image: omnipaxos-server
+  s2:
+    image: network-daemon
     container_name: s2
-    environment: *common-server-variables
+    environment:
+      <<: *common-server-variables
+      NODE_ID: "2"
+    volumes:
+      - ./configs/server_2.toml:/app/server-config.toml
+      - ./configs/cluster.toml:/app/cluster-config.toml
+      - s2-ipc:/tmp
+
+  s2-server:
+    image: server
+    container_name: s2-server
+    environment:
+      <<: *common-server-variables
+      NODE_ID: "2"
     volumes:
       - ./configs/server_2.toml:/app/server-config.toml
       - ./configs/cluster.toml:/app/cluster-config.toml
       - ./results/:/app/results/
+      - s2-ipc:/tmp
+    depends_on:
+      - s2
 
   s3:
-    <<: *server-base
+    image: network-daemon
     container_name: s3
+    environment:
+      <<: *common-server-variables
+      NODE_ID: "3"
+    volumes:
+      - ./configs/server_3.toml:/app/server-config.toml
+      - ./configs/cluster.toml:/app/cluster-config.toml
+      - s3-ipc:/tmp
+
+  s3-server:
+    image: server
+    container_name: s3-server
+    environment:
+      <<: *common-server-variables
+      NODE_ID: "3"
     volumes:
       - ./configs/server_3.toml:/app/server-config.toml
       - ./configs/cluster.toml:/app/cluster-config.toml
       - ./results/:/app/results/
-
+      - s3-ipc:/tmp
+    depends_on:
+      - s3
 
   # --- CLIENTS ---
   c1:
-    image: omnipaxos-client
+    image: client
     build: { context: ./, dockerfile: client.dockerfile }
     container_name: c1
     environment:
@@ -46,7 +95,7 @@ services:
       - ./results/:/app/results/
 
   c2: &client-base
-    image: omnipaxos-client
+    image: client
     container_name: c2
     environment:
       RUST_LOG: "info"
@@ -65,3 +114,8 @@ services:
       - ./configs/client_3.toml:/app/client-config.toml
       - ./results/:/app/results/
 
+# For shared sockets
+volumes:
+  s1-ipc:
+  s2-ipc:
+  s3-ipc:

@@ -1,13 +1,13 @@
-use crate::{configs::OmniPaxosKVConfig, server::OmniPaxosServer};
+use crate::{configs::ServerConfig, server::OmniPaxosServer};
+
 mod configs;
 mod database;
-mod network;
 mod server;
 
 #[tokio::main]
 pub async fn main() {
     env_logger::init();
-    let server_config = match OmniPaxosKVConfig::new() {
+    let server_config = match ServerConfig::new() {
         Ok(parsed_config) => parsed_config,
         Err(e) => panic!("{e}"),
     };

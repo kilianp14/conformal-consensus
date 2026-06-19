@@ -1,12 +1,11 @@
-use std::env;
-
 use benchmark::common::NodeId;
-use config::{Config, ConfigError, Environment, File};
+use config::{Config, ConfigError, File};
 use omnipaxos::{
     ClusterConfig as OmnipaxosClusterConfig, OmniPaxosConfig,
     ServerConfig as OmnipaxosServerConfig, utils::Mode,
 };
 use serde::{Deserialize, Serialize};
+use std::env;
 
 #[cfg(feature = "adaptive")]
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -16,17 +15,10 @@ pub struct CalibrationWindow {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ClusterConfig {
+pub struct ServerConfig {
     pub nodes: Vec<NodeId>,
-    pub node_addrs: Vec<String>,
     pub initial_leader: NodeId,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct LocalConfig {
     pub server_id: NodeId,
-    pub listen_address: String,
-    pub listen_port: u16,
     pub num_clients: usize,
     pub output_filepath: String,
     pub paxos_output_filepath: String,
@@ -40,28 +32,20 @@ pub struct LocalConfig {
     pub learning_rate: f64,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct OmniPaxosKVConfig {
-    #[serde(flatten)]
-    pub local: LocalConfig,
-    #[serde(flatten)]
-    pub cluster: ClusterConfig,
-}
-
-impl From<OmniPaxosKVConfig> for OmniPaxosConfig {
-    fn from(config: OmniPaxosKVConfig) -> Self {
+impl From<ServerConfig> for OmniPaxosConfig {
+    fn from(config: ServerConfig) -> Self {
         let cluster_config = OmnipaxosClusterConfig {
-            nodes: config.cluster.nodes,
+            nodes: config.nodes,
         };
         let server_config = OmnipaxosServerConfig {
-            pid: config.local.server_id,
-            mode: config.local.mode,
+            pid: config.server_id,
+            mode: config.mode,
             #[cfg(feature = "adaptive")]
-            risk_level: config.local.risk_level,
+            risk_level: config.risk_level,
             #[cfg(feature = "adaptive")]
-            learning_rate: config.local.learning_rate,
-            logger_file_path: Some(config.local.paxos_output_filepath),
-            enable_retry: config.local.enable_retry,
+            learning_rate: config.learning_rate,
+            logger_file_path: Some(config.paxos_output_filepath),
+            enable_retry: config.enable_retry,
             ..Default::default()
         };
         Self {
@@ -71,33 +55,21 @@ impl From<OmniPaxosKVConfig> for OmniPaxosConfig {
     }
 }
 
-impl OmniPaxosKVConfig {
+impl ServerConfig {
     pub fn new() -> Result<Self, ConfigError> {
-        let local_config_file = match env::var("SERVER_CONFIG_FILE") {
-            Ok(file_path) => file_path,
-            Err(_) => panic!("Requires SERVER_CONFIG_FILE environment variable to be set"),
-        };
-        let cluster_config_file = match env::var("CLUSTER_CONFIG_FILE") {
-            Ok(file_path) => file_path,
-            Err(_) => panic!("Requires CLUSTER_CONFIG_FILE environment variable to be set"),
-        };
+        let server_config_file = env::var("SERVER_CONFIG_FILE")
+            .expect("Requires SERVER_CONFIG_FILE environment variable to be set");
+        let node_id = env::var("NODE_ID").expect("Requires NODE_ID environment variable to be set");
         let config = Config::builder()
-            .add_source(File::with_name(&local_config_file))
-            .add_source(File::with_name(&cluster_config_file))
-            // Add-in/overwrite settings with environment variables (with a prefix of OMNIPAXOS)
-            .add_source(
-                Environment::with_prefix("OMNIPAXOS")
-                    .try_parsing(true)
-                    .list_separator(",")
-                    .with_list_parse_key("node_addrs"),
-            )
+            .add_source(File::with_name(&server_config_file))
+            .set_override("server_id", node_id)?
             .build()?;
+
         config.try_deserialize()
     }
 
     pub fn get_peers(&self, node: NodeId) -> Vec<NodeId> {
-        self.cluster
-            .nodes
+        self.nodes
             .iter()
             .cloned()
             .filter(|&id| id != node)

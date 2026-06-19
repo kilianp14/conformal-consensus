@@ -5,10 +5,12 @@ CLIENT_IMAGE="europe-docker.pkg.dev/conformal-consensus/docker-images-europe/cli
 GEO_REGION="${1:-europe}"
 
 EXPERIMENTS=(
-  "crc_adaptive localevents --no-retry 0.1 0.005"
-  "fast localevents --no-retry 0.1 0.005"
-  "normal localevents --no-retry 0.1 0.005"
-  "heuristic_adaptive localevents --no-retry 0.1 0.005"
+  "heuristic_adaptive localevents --retry 0.1 0.005"
+  "crc_adaptive localevents --retry 0.1 0.005"
+  "crc_adaptive localevents --retry 0.05 0.005"
+  "crc_adaptive localevents --retry 0.01 0.005"
+  "fast localevents --retry 0.1 0.005"
+  "normal localevents --retry 0.1 0.005"
 )
 
 echo "Fetching instances for region: $GEO_REGION..."

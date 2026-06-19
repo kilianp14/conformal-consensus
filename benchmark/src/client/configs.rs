@@ -1,8 +1,7 @@
-use std::{env, time::Duration};
-
 use benchmark::common::{NodeId, Timestamp};
 use config::{Config, ConfigError, Environment, File};
 use serde::{Deserialize, Serialize};
+use std::{env, time::Duration};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ClientConfig {

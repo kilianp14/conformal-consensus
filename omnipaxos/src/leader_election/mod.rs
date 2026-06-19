@@ -287,6 +287,26 @@ impl BallotLeaderElection {
     }
 
     #[cfg(feature = "adaptive")]
+    pub fn get_current_latencies(&self) -> HashMap<NodeId, Option<f64>> {
+        let mut latencies = HashMap::with_capacity(self.peers.len());
+        for node_id in &self.peers {
+            let latency = self.get_node_latency_avg(*node_id);
+            #[cfg(feature = "logging")]
+            {
+                slog::info!(
+                    self.logger,
+                    "Latency from {} to {}: {:?}",
+                    self.pid,
+                    node_id,
+                    latency
+                );
+            }
+            latencies.insert(*node_id, latency);
+        }
+        latencies
+    }
+
+    #[cfg(feature = "adaptive")]
     fn get_node_latency_avg(&self, node_id: NodeId) -> Option<f64> {
         self.latency_histories.get(&node_id).and_then(|history| {
             if history.is_empty() {

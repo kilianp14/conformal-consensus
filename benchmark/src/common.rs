@@ -6,11 +6,14 @@ use std::{
     time::Duration,
 };
 use tokio::net::{
-    TcpStream,
-    tcp::{OwnedReadHalf, OwnedWriteHalf},
+    TcpStream, UnixStream,
+    tcp::{OwnedReadHalf as TcpReadHalf, OwnedWriteHalf as TcpWriteHalf},
+    unix::{OwnedReadHalf as UdsReadHalf, OwnedWriteHalf as UdsWriteHalf},
 };
 use tokio_serde::{Framed, formats::Bincode};
 use tokio_util::codec::{Framed as CodecFramed, FramedRead, FramedWrite, LengthDelimitedCodec};
+
+pub const IPC_SOCKET_PATH: &str = "/tmp/omnipaxos-ipc.sock";
 
 pub type CommandId = usize;
 pub type ClientId = u64;
@@ -78,6 +81,18 @@ impl ServerMessage {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum DaemonToServer {
+    Cluster(NodeId, ClusterMessage),
+    Client(ClientId, ClientMessage),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ServerToDaemon {
+    Cluster(NodeId, ClusterMessage),
+    Client(ClientId, ServerMessage),
+}
+
 pub type RegistrationConnection = Framed<
     CodecFramed<TcpStream, LengthDelimitedCodec>,
     RegistrationMessage,
@@ -91,13 +106,13 @@ pub fn frame_registration_connection(stream: TcpStream) -> RegistrationConnectio
 }
 
 pub type FromNodeConnection = Framed<
-    FramedRead<OwnedReadHalf, LengthDelimitedCodec>,
+    FramedRead<TcpReadHalf, LengthDelimitedCodec>,
     ClusterMessage,
     (),
     Bincode<ClusterMessage, ()>,
 >;
 pub type ToNodeConnection = Framed<
-    FramedWrite<OwnedWriteHalf, LengthDelimitedCodec>,
+    FramedWrite<TcpWriteHalf, LengthDelimitedCodec>,
     (),
     ClusterMessage,
     Bincode<(), ClusterMessage>,
@@ -105,59 +120,125 @@ pub type ToNodeConnection = Framed<
 
 pub fn frame_cluster_connection(stream: TcpStream) -> (FromNodeConnection, ToNodeConnection) {
     let (reader, writer) = stream.into_split();
-    let stream = FramedRead::new(reader, LengthDelimitedCodec::new());
-    let sink = FramedWrite::new(writer, LengthDelimitedCodec::new());
     (
-        FromNodeConnection::new(stream, Bincode::default()),
-        ToNodeConnection::new(sink, Bincode::default()),
+        FromNodeConnection::new(
+            FramedRead::new(reader, LengthDelimitedCodec::new()),
+            Bincode::default(),
+        ),
+        ToNodeConnection::new(
+            FramedWrite::new(writer, LengthDelimitedCodec::new()),
+            Bincode::default(),
+        ),
     )
 }
 
 pub type FromServerConnection = Framed<
-    FramedRead<OwnedReadHalf, LengthDelimitedCodec>,
+    FramedRead<TcpReadHalf, LengthDelimitedCodec>,
     ServerMessage,
     (),
-    Bincode<ServerMessage, ()>,
+    tokio_serde::formats::Bincode<ServerMessage, ()>,
 >;
 
 pub type ToServerConnection = Framed<
-    FramedWrite<OwnedWriteHalf, LengthDelimitedCodec>,
+    FramedWrite<TcpWriteHalf, LengthDelimitedCodec>,
     (),
     ClientMessage,
-    Bincode<(), ClientMessage>,
+    tokio_serde::formats::Bincode<(), ClientMessage>,
 >;
 
 pub type FromClientConnection = Framed<
-    FramedRead<OwnedReadHalf, LengthDelimitedCodec>,
+    FramedRead<TcpReadHalf, LengthDelimitedCodec>,
     ClientMessage,
     (),
-    Bincode<ClientMessage, ()>,
+    tokio_serde::formats::Bincode<ClientMessage, ()>,
 >;
 
 pub type ToClientConnection = Framed<
-    FramedWrite<OwnedWriteHalf, LengthDelimitedCodec>,
+    FramedWrite<TcpWriteHalf, LengthDelimitedCodec>,
     (),
     ServerMessage,
-    Bincode<(), ServerMessage>,
+    tokio_serde::formats::Bincode<(), ServerMessage>,
 >;
 
 pub fn frame_clients_connection(stream: TcpStream) -> (FromServerConnection, ToServerConnection) {
     let (reader, writer) = stream.into_split();
-    let stream = FramedRead::new(reader, LengthDelimitedCodec::new());
-    let sink = FramedWrite::new(writer, LengthDelimitedCodec::new());
     (
-        FromServerConnection::new(stream, Bincode::default()),
-        ToServerConnection::new(sink, Bincode::default()),
+        FromServerConnection::new(
+            FramedRead::new(reader, LengthDelimitedCodec::new()),
+            Bincode::default(),
+        ),
+        ToServerConnection::new(
+            FramedWrite::new(writer, LengthDelimitedCodec::new()),
+            Bincode::default(),
+        ),
     )
 }
 
 pub fn frame_servers_connection(stream: TcpStream) -> (FromClientConnection, ToClientConnection) {
     let (reader, writer) = stream.into_split();
-    let stream = FramedRead::new(reader, LengthDelimitedCodec::new());
-    let sink = FramedWrite::new(writer, LengthDelimitedCodec::new());
     (
-        FromClientConnection::new(stream, Bincode::default()),
-        ToClientConnection::new(sink, Bincode::default()),
+        FromClientConnection::new(
+            FramedRead::new(reader, LengthDelimitedCodec::new()),
+            Bincode::default(),
+        ),
+        ToClientConnection::new(
+            FramedWrite::new(writer, LengthDelimitedCodec::new()),
+            Bincode::default(),
+        ),
+    )
+}
+
+pub type IpcFromDaemon = Framed<
+    FramedRead<UdsReadHalf, LengthDelimitedCodec>,
+    DaemonToServer,
+    (),
+    Bincode<DaemonToServer, ()>,
+>;
+pub type IpcToServer = Framed<
+    FramedWrite<UdsWriteHalf, LengthDelimitedCodec>,
+    (),
+    ServerToDaemon,
+    Bincode<(), ServerToDaemon>,
+>;
+
+pub type IpcFromServer = Framed<
+    FramedRead<UdsReadHalf, LengthDelimitedCodec>,
+    ServerToDaemon,
+    (),
+    Bincode<ServerToDaemon, ()>,
+>;
+pub type IpcToDaemon = Framed<
+    FramedWrite<UdsWriteHalf, LengthDelimitedCodec>,
+    (),
+    DaemonToServer,
+    Bincode<(), DaemonToServer>,
+>;
+
+pub fn frame_ipc_server_side(stream: UnixStream) -> (IpcFromDaemon, IpcToServer) {
+    let (reader, writer) = stream.into_split();
+    (
+        IpcFromDaemon::new(
+            FramedRead::new(reader, LengthDelimitedCodec::new()),
+            Bincode::default(),
+        ),
+        IpcToServer::new(
+            FramedWrite::new(writer, LengthDelimitedCodec::new()),
+            Bincode::default(),
+        ),
+    )
+}
+
+pub fn frame_ipc_daemon_side(stream: UnixStream) -> (IpcFromServer, IpcToDaemon) {
+    let (reader, writer) = stream.into_split();
+    (
+        IpcFromServer::new(
+            FramedRead::new(reader, LengthDelimitedCodec::new()),
+            Bincode::default(),
+        ),
+        IpcToDaemon::new(
+            FramedWrite::new(writer, LengthDelimitedCodec::new()),
+            Bincode::default(),
+        ),
     )
 }
 
