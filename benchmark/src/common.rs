@@ -1,4 +1,4 @@
-use omnipaxos::{macros::Entry, messages::Message as OmniPaxosMessage, utils::AcceptStatus};
+use omnipaxos::{macros::Entry, utils::AcceptStatus};
 use serde::{Deserialize, Serialize};
 use std::{
     net::{SocketAddr, ToSocketAddrs},
@@ -37,7 +37,9 @@ pub enum KVCommand {
 
 impl PartialEq for Command {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id && self.coordinator_id == other.coordinator_id
+        self.id == other.id
+            && self.coordinator_id == other.coordinator_id
+            && self.client_id == other.client_id
     }
 }
 impl Eq for Command {}
@@ -47,50 +49,54 @@ pub enum RegistrationMessage {
     NodeRegister(NodeId),
     ClientRegister,
 }
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ClusterMessage {
-    OmniPaxosMessage(OmniPaxosMessage<Command>),
-    LeaderStartSignal(Timestamp),
+pub enum DaemonToDaemon {
+    OmniPaxosMessage(Vec<u8>),
+    StartExperiment(Timestamp),
 }
 
-pub type ClientMessage = (CommandId, KVCommand);
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum FromClient {
+    Command(CommandId, KVCommand),
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ServerMessage {
+pub enum ToClient {
     Write(CommandId, AcceptStatus),
     Read(CommandId, Option<String>, AcceptStatus),
-    StartSignal(Timestamp),
+    StartExperiment(Timestamp),
 }
 
-impl ServerMessage {
+impl ToClient {
     pub fn command_id(&self) -> CommandId {
         match self {
-            ServerMessage::Write(id, _) => *id,
-            ServerMessage::Read(id, _, _) => *id,
-            ServerMessage::StartSignal(_) => unimplemented!(),
+            ToClient::Write(id, _) => *id,
+            ToClient::Read(id, _, _) => *id,
+            ToClient::StartExperiment(_) => unimplemented!(),
         }
     }
 
     pub fn accept_status(&self) -> AcceptStatus {
         match self {
-            ServerMessage::Write(_, accept_status) => *accept_status,
-            ServerMessage::Read(_, _, accept_status) => *accept_status,
-            ServerMessage::StartSignal(_) => unimplemented!(),
+            ToClient::Write(_, accept_status) => *accept_status,
+            ToClient::Read(_, _, accept_status) => *accept_status,
+            ToClient::StartExperiment(_) => unimplemented!(),
         }
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DaemonToServer {
-    Cluster(NodeId, ClusterMessage),
-    Client(ClientId, ClientMessage),
+    Cluster(NodeId, Vec<u8>),
+    Client(ClientId, FromClient),
+    StartExperiment(Timestamp),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ServerToDaemon {
-    Cluster(NodeId, ClusterMessage),
-    Client(ClientId, ServerMessage),
+    Cluster(NodeId, Vec<u8>),
+    Client(ClientId, ToClient),
+    StartExperiment(Timestamp),
 }
 
 pub type RegistrationConnection = Framed<
@@ -107,15 +113,15 @@ pub fn frame_registration_connection(stream: TcpStream) -> RegistrationConnectio
 
 pub type FromNodeConnection = Framed<
     FramedRead<TcpReadHalf, LengthDelimitedCodec>,
-    ClusterMessage,
+    DaemonToDaemon,
     (),
-    Bincode<ClusterMessage, ()>,
+    Bincode<DaemonToDaemon, ()>,
 >;
 pub type ToNodeConnection = Framed<
     FramedWrite<TcpWriteHalf, LengthDelimitedCodec>,
     (),
-    ClusterMessage,
-    Bincode<(), ClusterMessage>,
+    DaemonToDaemon,
+    Bincode<(), DaemonToDaemon>,
 >;
 
 pub fn frame_cluster_connection(stream: TcpStream) -> (FromNodeConnection, ToNodeConnection) {
@@ -134,30 +140,30 @@ pub fn frame_cluster_connection(stream: TcpStream) -> (FromNodeConnection, ToNod
 
 pub type FromServerConnection = Framed<
     FramedRead<TcpReadHalf, LengthDelimitedCodec>,
-    ServerMessage,
+    ToClient,
     (),
-    tokio_serde::formats::Bincode<ServerMessage, ()>,
+    tokio_serde::formats::Bincode<ToClient, ()>,
 >;
 
 pub type ToServerConnection = Framed<
     FramedWrite<TcpWriteHalf, LengthDelimitedCodec>,
     (),
-    ClientMessage,
-    tokio_serde::formats::Bincode<(), ClientMessage>,
+    FromClient,
+    tokio_serde::formats::Bincode<(), FromClient>,
 >;
 
 pub type FromClientConnection = Framed<
     FramedRead<TcpReadHalf, LengthDelimitedCodec>,
-    ClientMessage,
+    FromClient,
     (),
-    tokio_serde::formats::Bincode<ClientMessage, ()>,
+    tokio_serde::formats::Bincode<FromClient, ()>,
 >;
 
 pub type ToClientConnection = Framed<
     FramedWrite<TcpWriteHalf, LengthDelimitedCodec>,
     (),
-    ServerMessage,
-    tokio_serde::formats::Bincode<(), ServerMessage>,
+    ToClient,
+    tokio_serde::formats::Bincode<(), ToClient>,
 >;
 
 pub fn frame_clients_connection(stream: TcpStream) -> (FromServerConnection, ToServerConnection) {

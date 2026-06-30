@@ -1,7 +1,6 @@
 use benchmark::common::{
-    ClientMessage, FromServerConnection, NodeId, RegistrationMessage, ServerMessage,
-    ToServerConnection, frame_clients_connection, frame_registration_connection,
-    resolve_addr_with_retry,
+    FromClient, FromServerConnection, NodeId, RegistrationMessage, ToClient, ToServerConnection,
+    frame_clients_connection, frame_registration_connection, resolve_addr_with_retry,
 };
 use futures::{SinkExt, StreamExt};
 use log::{error, info, warn};
@@ -15,8 +14,8 @@ use tokio::{
 
 pub struct Network {
     server_connections: Vec<Option<ServerConnection>>,
-    server_message_sender: Sender<ServerMessage>,
-    pub server_messages: Receiver<ServerMessage>,
+    server_message_sender: Sender<ToClient>,
+    pub server_messages: Receiver<ToClient>,
     batch_size: usize,
 }
 
@@ -93,7 +92,7 @@ impl Network {
         }
     }
 
-    pub async fn send(&mut self, to: NodeId, msg: ClientMessage) {
+    pub async fn send(&mut self, to: NodeId, msg: FromClient) {
         match self.server_connections.get_mut(to as usize) {
             Some(connection_slot) => match connection_slot {
                 Some(connection) => {
@@ -124,7 +123,7 @@ struct ServerConnection {
     // server_id: NodeId,
     reader_task: JoinHandle<()>,
     writer_task: JoinHandle<()>,
-    outgoing_messages: Sender<ClientMessage>,
+    outgoing_messages: Sender<FromClient>,
 }
 
 impl ServerConnection {
@@ -133,7 +132,7 @@ impl ServerConnection {
         reader: FromServerConnection,
         mut writer: ToServerConnection,
         batch_size: usize,
-        incoming_messages: Sender<ServerMessage>,
+        incoming_messages: Sender<ToClient>,
     ) -> Self {
         // Reader Actor
         let reader_task = tokio::spawn(async move {
@@ -175,8 +174,8 @@ impl ServerConnection {
 
     pub async fn send(
         &mut self,
-        msg: ClientMessage,
-    ) -> Result<(), mpsc::error::SendError<ClientMessage>> {
+        msg: FromClient,
+    ) -> Result<(), mpsc::error::SendError<FromClient>> {
         self.outgoing_messages.send(msg).await
     }
 

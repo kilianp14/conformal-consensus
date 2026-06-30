@@ -90,6 +90,7 @@ services:
     environment:
       RUST_LOG: "info"
       CONFIG_FILE: "/app/client-config.toml"
+      NODE_ID: "1"
     volumes:
       - ./configs/client_1.toml:/app/client-config.toml
       - ./results/:/app/results/
@@ -100,6 +101,7 @@ services:
     environment:
       RUST_LOG: "info"
       CONFIG_FILE: "/app/client-config.toml"
+      NODE_ID: "2"
     volumes:
       - ./configs/client_2.toml:/app/client-config.toml
       - ./results/:/app/results/
@@ -110,6 +112,7 @@ services:
     environment:
       RUST_LOG: "info"
       CONFIG_FILE: "/app/client-config.toml"
+      NODE_ID: "3"
     volumes:
       - ./configs/client_3.toml:/app/client-config.toml
       - ./results/:/app/results/

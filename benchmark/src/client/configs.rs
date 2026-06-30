@@ -1,5 +1,5 @@
 use benchmark::common::{NodeId, Timestamp};
-use config::{Config, ConfigError, Environment, File};
+use config::{Config, ConfigError, File};
 use serde::{Deserialize, Serialize};
 use std::{env, time::Duration};
 
@@ -217,14 +217,14 @@ fn sample_normal(mean: f64, std_dev: f64, rng: &mut impl rand::RngExt) -> f64 {
 
 impl ClientConfig {
     pub fn new() -> Result<Self, ConfigError> {
-        let config_file = match env::var("CONFIG_FILE") {
-            Ok(file_path) => file_path,
-            Err(_) => panic!("Requires CONFIG_FILE environment variable to be set"),
-        };
+        let config_file =
+            env::var("CONFIG_FILE").expect("Requires CONFIG_FILE environment variable to be set");
+        let node_id = env::var("NODE_ID").expect("Requires NODE_ID environment variable to be set");
         let config = Config::builder()
             .add_source(File::with_name(&config_file))
-            .add_source(Environment::with_prefix("OMNIPAXOS").try_parsing(true))
+            .set_override("server_id", node_id)?
             .build()?;
+
         config.try_deserialize()
     }
 }

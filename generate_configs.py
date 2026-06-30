@@ -105,25 +105,15 @@ def main(mode, load, retry: bool, risk: float, learning_rate: float):
         print(inst["name"])
 
     nodes = [i + 1 for i in range(len(instances))]
-    node_addrs = [
-        f"{inst['name']}.{inst['zone'].split('/')[-1]}.c.conformal-consensus.internal:{PORT}"
-        for inst in instances
-    ]
     os.makedirs("configs", exist_ok=True)
-    cluster_config = {
-        "nodes": nodes,
-        "node_addrs": node_addrs,
-        "initial_leader": nodes[len(nodes) - 1],
-    }
-    with open("configs/gcp_cluster.toml", "w") as f:
-        f.write(to_toml(cluster_config))
 
     for i, inst in enumerate(instances):
         name = inst["name"]
         node_id = i + 1
 
         server_cfg = {
-            "server_id": node_id,
+            "nodes": nodes,
+            "initial_leader": nodes[len(nodes) - 1],
             "num_clients": NUM_CLIENTS_PER_NODE,
             "output_filepath": f"{OUTPUT_DIR}/server_{node_id}.log",
             "paxos_output_filepath": f"{OUTPUT_DIR}/paxos_{node_id}.log",

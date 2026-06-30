@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crate::{configs::ClientConfig, data_collection::ClientData, network::Network};
-use benchmark::common::{ClientId, KVCommand, NodeId, ServerMessage};
+use benchmark::common::{ClientId, FromClient, KVCommand, NodeId, ToClient};
 use chrono::Utc;
 use log::{debug, info, warn};
 use rand::{RngExt, SeedableRng, rngs::SmallRng};
@@ -39,7 +39,7 @@ impl Client {
         // Wait for server to signal start
         info!("{}: Waiting for start signal from server", self.id);
         match self.network.server_messages.recv().await {
-            Some(ServerMessage::StartSignal(start_time)) => {
+            Some(ToClient::StartExperiment(start_time)) => {
                 Self::wait_until_sync_time(&mut self.config, start_time).await;
             }
             _ => panic!("Error waiting for start signal"),
@@ -100,10 +100,10 @@ impl Client {
         self.save_results().expect("Failed to save results");
     }
 
-    fn handle_server_message(&mut self, msg: ServerMessage) {
+    fn handle_server_message(&mut self, msg: ToClient) {
         debug!("Recieved {msg:?}");
         match msg {
-            ServerMessage::StartSignal(_) => (),
+            ToClient::StartExperiment(_) => (),
             server_response => {
                 let cmd_id = server_response.command_id();
                 let acc_status = server_response.accept_status();
@@ -118,7 +118,7 @@ impl Client {
             true => KVCommand::Put(key.clone(), key),
             false => KVCommand::Get(key),
         };
-        let request = (self.next_request_id, cmd);
+        let request = FromClient::Command(self.next_request_id, cmd);
         debug!("Sending {request:?}");
         self.network.send(self.active_server, request).await;
         self.client_data.new_request(is_write);

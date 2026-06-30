@@ -23,13 +23,11 @@ for i in "${!REGIONS[@]}"; do
     --zone="$ZONE" \
     --machine-type="$MACHINE_TYPE" \
     --network-interface=nic-type=GVNIC,network-tier=PREMIUM \
-    --provisioning-model=SPOT \
-    --instance-termination-action=STOP \
+    --provisioning-model=STANDARD \
     --image-family="$IMAGE_FAMILY" \
     --image-project="$IMAGE_PROJECT" \
     --boot-disk-size=10GB \
     --boot-disk-type=pd-standard \
-    --maintenance-policy=TERMINATE \
     --no-restart-on-failure \
     --labels=experiment=omnipaxos,geo=europe \
     --scopes=https://www.googleapis.com/auth/cloud-platform \
@@ -103,6 +101,7 @@ for i in "${!INSTANCES[@]}"; do
         --name daemon \
         --network host \
         -v ~/gcp_cluster.toml:/app/cluster.toml \
+        -v /tmp:/tmp \
         -e RUST_LOG=info \
         -e CLUSTER_CONFIG_FILE=/app/cluster.toml \
         -e NODE_ID=\$NODE_ID \

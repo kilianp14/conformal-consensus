@@ -1,6 +1,6 @@
 use benchmark::common::{
-    ClientId, ClusterMessage, DaemonToServer, IPC_SOCKET_PATH, NodeId, RegistrationMessage,
-    ServerMessage, ServerToDaemon, frame_cluster_connection, frame_ipc_daemon_side,
+    ClientId, DaemonToDaemon, DaemonToServer, IPC_SOCKET_PATH, NodeId, RegistrationMessage,
+    ServerToDaemon, Timestamp, ToClient, frame_cluster_connection, frame_ipc_daemon_side,
     frame_registration_connection, frame_servers_connection, resolve_addr_with_retry,
 };
 use config::{Config, File};
@@ -36,7 +36,7 @@ pub async fn main() {
     };
     let node_id: NodeId = match env::var("NODE_ID") {
         Ok(id) => u64::from_str(&id).expect("Invalid node id"),
-        Err(_) => panic!("Requires CLUSTER_CONFIG_FILE environment variable to be set"),
+        Err(_) => panic!("Requires NODE_ID environment variable to be set"),
     };
     let config: ClusterConfig = Config::builder()
         .add_source(File::with_name(&cluster_config_file))
@@ -51,9 +51,10 @@ pub async fn main() {
 #[derive(Default)]
 struct DaemonState {
     server_tx: Option<UnboundedSender<DaemonToServer>>,
-    peer_txs: HashMap<NodeId, UnboundedSender<ClusterMessage>>,
-    client_txs: HashMap<ClientId, UnboundedSender<ServerMessage>>,
+    peer_txs: HashMap<NodeId, UnboundedSender<DaemonToDaemon>>,
+    client_txs: HashMap<ClientId, UnboundedSender<ToClient>>,
     next_client_id: ClientId,
+    start_time: Option<Timestamp>,
 }
 
 pub async fn run_daemon(config: ClusterConfig, node_id: NodeId) {
@@ -83,7 +84,6 @@ pub async fn run_daemon(config: ClusterConfig, node_id: NodeId) {
     // Spawn IPC (Unix Socket) Listener for the local Server container
     let state_clone = state.clone();
     tokio::spawn(async move {
-        // Clean up old socket if it exists
         let _ = std::fs::remove_file(IPC_SOCKET_PATH);
         let listener = UnixListener::bind(IPC_SOCKET_PATH).expect("Failed to bind to IPC socket");
         info!("Listening for local server on UDS: {}", IPC_SOCKET_PATH);
@@ -140,7 +140,7 @@ pub async fn run_daemon(config: ClusterConfig, node_id: NodeId) {
                         {
                             let stream = registration.into_inner().into_inner();
                             spawn_peer_tasks(peer_id, stream, state_clone.clone());
-                            break; // Done connecting, exit the retry loop
+                            break;
                         }
                     }
                     Err(err) => {
@@ -153,30 +153,47 @@ pub async fn run_daemon(config: ClusterConfig, node_id: NodeId) {
         });
     }
 
-    // Keep daemon alive indefinitely
     std::future::pending::<()>().await;
 }
 
 // Connection Handlers
 fn handle_ipc_connection(stream: tokio::net::UnixStream, state: Arc<Mutex<DaemonState>>) {
     let (mut ipc_rx, mut ipc_tx) = frame_ipc_daemon_side(stream);
-
-    // Create writer channel for the Server
     let (server_tx, mut server_rx) = mpsc::unbounded_channel::<DaemonToServer>();
+
     {
         let mut st = state.lock().unwrap();
-        st.server_tx = Some(server_tx);
+        st.server_tx = Some(server_tx.clone());
+        info!("Local server connected via IPC.");
+        if let Some(ts) = st.start_time {
+            let catchup_msg = DaemonToServer::StartExperiment(ts);
+            let _ = server_tx.send(catchup_msg);
+        }
     }
 
     // Reader Task (Server -> Daemon -> Out to Network)
     let state_reader = state.clone();
+    let server_tx_clone = server_tx.clone();
     tokio::spawn(async move {
         while let Some(Ok(msg)) = ipc_rx.next().await {
-            let st = state_reader.lock().unwrap();
+            let mut st = state_reader.lock().unwrap();
             match msg {
+                ServerToDaemon::StartExperiment(start_time) => {
+                    info!("Server initiated experiment start at {}", start_time);
+                    st.start_time = Some(start_time);
+
+                    // Broadcast to all peers
+                    for tx in st.peer_txs.values() {
+                        let _ = tx.send(DaemonToDaemon::StartExperiment(start_time));
+                    }
+                    // Serve to all currently connected clients
+                    for tx in st.client_txs.values() {
+                        let _ = tx.send(ToClient::StartExperiment(start_time));
+                    }
+                }
                 ServerToDaemon::Cluster(node_id, cluster_msg) => {
                     if let Some(tx) = st.peer_txs.get(&node_id) {
-                        let _ = tx.send(cluster_msg);
+                        let _ = tx.send(DaemonToDaemon::OmniPaxosMessage(cluster_msg));
                     }
                 }
                 ServerToDaemon::Client(client_id, server_msg) => {
@@ -188,10 +205,19 @@ fn handle_ipc_connection(stream: tokio::net::UnixStream, state: Arc<Mutex<Daemon
         }
         info!("Local server disconnected.");
         let mut st = state_reader.lock().unwrap();
-        st.server_tx = None;
+
+        // Use `same_channel` to avoid wiping a new server instance connection if a race occurs
+        if st
+            .server_tx
+            .as_ref()
+            .is_some_and(|tx| tx.same_channel(&server_tx_clone))
+        {
+            st.server_tx = None;
+            st.start_time = None;
+        }
     });
 
-    // Writer Task (Network -> Daemon -> In to Server)
+    // Writer Task (In from Network -> Daemon -> Server)
     tokio::spawn(async move {
         while let Some(msg) = server_rx.recv().await {
             if ipc_tx.send(msg).await.is_err() {
@@ -222,7 +248,7 @@ fn handle_incoming_tcp(connection: TcpStream, state: Arc<Mutex<DaemonState>>) {
 
 fn spawn_peer_tasks(peer_id: NodeId, stream: TcpStream, state: Arc<Mutex<DaemonState>>) {
     let (mut tcp_rx, mut tcp_tx) = frame_cluster_connection(stream);
-    let (peer_tx, mut peer_rx) = mpsc::unbounded_channel::<ClusterMessage>();
+    let (peer_tx, mut peer_rx) = mpsc::unbounded_channel::<DaemonToDaemon>();
 
     state.lock().unwrap().peer_txs.insert(peer_id, peer_tx);
 
@@ -230,9 +256,27 @@ fn spawn_peer_tasks(peer_id: NodeId, stream: TcpStream, state: Arc<Mutex<DaemonS
     let state_reader = state.clone();
     tokio::spawn(async move {
         while let Some(Ok(msg)) = tcp_rx.next().await {
-            let st = state_reader.lock().unwrap();
-            if let Some(tx) = &st.server_tx {
-                let _ = tx.send(DaemonToServer::Cluster(peer_id, msg));
+            let mut st = state_reader.lock().unwrap();
+
+            match msg {
+                DaemonToDaemon::StartExperiment(ts) => {
+                    st.start_time = Some(ts);
+
+                    // Serve start signal to our local clients
+                    for tx in st.client_txs.values() {
+                        let _ = tx.send(ToClient::StartExperiment(ts));
+                    }
+
+                    // Serve start signal to local server
+                    if let Some(tx) = &st.server_tx {
+                        let _ = tx.send(DaemonToServer::StartExperiment(ts));
+                    }
+                }
+                DaemonToDaemon::OmniPaxosMessage(cluster_msg) => {
+                    if let Some(tx) = &st.server_tx {
+                        let _ = tx.send(DaemonToServer::Cluster(peer_id, cluster_msg));
+                    }
+                }
             }
         }
         info!("Peer {} disconnected.", peer_id);
@@ -250,22 +294,24 @@ fn spawn_peer_tasks(peer_id: NodeId, stream: TcpStream, state: Arc<Mutex<DaemonS
 }
 
 fn spawn_client_tasks(stream: TcpStream, state: Arc<Mutex<DaemonState>>) {
+    let (mut tcp_rx, mut tcp_tx) = frame_servers_connection(stream);
+    let (client_tx, mut client_rx) = mpsc::unbounded_channel::<ToClient>();
+
     let client_id = {
         let mut st = state.lock().unwrap();
         st.next_client_id += 1;
-        st.next_client_id
+        let id = st.next_client_id;
+
+        st.client_txs.insert(id, client_tx.clone());
+
+        if let Some(ts) = st.start_time {
+            let _ = client_tx.send(ToClient::StartExperiment(ts));
+        }
+
+        id
     };
 
     info!("Registered incoming client: {}", client_id);
-
-    let (mut tcp_rx, mut tcp_tx) = frame_servers_connection(stream);
-    let (client_tx, mut client_rx) = mpsc::unbounded_channel::<ServerMessage>();
-
-    state
-        .lock()
-        .unwrap()
-        .client_txs
-        .insert(client_id, client_tx);
 
     // Reader Task (Client -> Daemon -> Server)
     let state_reader = state.clone();

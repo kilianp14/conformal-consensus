@@ -60,7 +60,7 @@ pub(crate) mod defaults {
     pub(crate) const BUFFER_SIZE: usize = 100000;
     pub(crate) const BLE_BUFFER_SIZE: usize = 100;
     pub(crate) const ELECTION_TIMEOUT: u64 = 1;
-    pub(crate) const RESEND_MESSAGE_TIMEOUT: u64 = 100;
+    pub(crate) const RESEND_MESSAGE_TIMEOUT: u64 = 5;
     #[cfg(feature = "adaptive")]
     pub(crate) const LATENCY_TRACKING_WINDOW_SIZE: usize = 10;
 }
