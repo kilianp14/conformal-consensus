@@ -1,8 +1,7 @@
 #!/bin/bash
 
 PROJECT_ID="conformal-consensus"
-REGIONS=("europe")
-REPO_NAME="docker-images-europe"
+REGIONS=("europe" "us")
 
 images=(
   "client:client.dockerfile"
@@ -11,7 +10,7 @@ images=(
   "daemon:daemon.dockerfile"
 )
 for REGION in "${REGIONS[@]}"; do
-  REGISTRY_PATH="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}"
+  REGISTRY_PATH="${REGION}-docker.pkg.dev/${PROJECT_ID}/docker-images-${REGION}"
   gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
 
   for entry in "${images[@]}"; do

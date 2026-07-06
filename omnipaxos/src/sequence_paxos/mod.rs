@@ -1,20 +1,23 @@
 #[cfg(feature = "adaptive")]
-use crate::sequence_paxos::{predictor::Label, utils::SlotId};
+use crate::sequence_paxos::predictor::Label;
 #[cfg(feature = "logging")]
 use crate::utils::{create_logger, FastPathStats};
 use crate::{
-    sequence_paxos::{log::MemoryStorage, utils::LeaderState},
+    sequence_paxos::{
+        log::MemoryStorage,
+        utils::{LeaderState, SlotId},
+    },
     utils::{AcceptStatus, Ballot, Entry, Mode, NodeId, Phase, Quorum, Role, SequenceNumber},
     OmniPaxosConfig,
 };
 #[cfg(feature = "logging")]
 use slog::{info, Logger};
-use std::fmt::Debug;
 #[cfg(feature = "logging")]
 use std::mem;
+use std::{collections::HashMap, fmt::Debug};
 #[cfg(feature = "adaptive")]
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::VecDeque,
     time::{Duration, Instant},
 };
 
@@ -103,6 +106,8 @@ where
     // Keeps track of sequence of accepts from leader where AcceptSync = 1
     current_seq_num: SequenceNumber,
     // Proposals currently in transit with current features
+    #[cfg(not(feature = "adaptive"))]
+    pending_proposals: HashMap<SlotId, T>,
     #[cfg(feature = "adaptive")]
     pending_proposals: HashMap<SlotId, (T, Option<Features>)>,
     // Proposals currently in transit testing fast-path success with number of test accepted
@@ -164,7 +169,6 @@ where
             cached_promise_message: None,
             current_seq_num: SequenceNumber::default(),
             retrying: config.enable_retry,
-            #[cfg(feature = "adaptive")]
             pending_proposals: HashMap::new(),
             #[cfg(feature = "adaptive")]
             test_proposals: Vec::new(),
@@ -216,13 +220,13 @@ where
 
     /// Append an entry to the replicated log.
     pub(crate) fn append(&mut self, entry: T) {
+        #[cfg(feature = "logging")]
+        {
+            self.fast_path_stats.append_attempts += 1;
+        }
         match self.state {
             (Role::Leader, Phase::Accept) => self.op_accept_entry_leader(entry),
             (Role::Follower, Phase::Accept) => {
-                #[cfg(feature = "logging")]
-                {
-                    self.fast_path_stats.append_attempts += 1;
-                }
                 #[cfg(not(feature = "adaptive"))]
                 {
                     match self.mode {
@@ -343,9 +347,7 @@ where
     /// Resets, logs and returns current fast path stats
     #[cfg(feature = "logging")]
     pub(crate) fn take_fast_path_stats(&mut self) -> FastPathStats {
-        let stats = mem::take(&mut self.fast_path_stats);
-        slog::info!(self.logger, "Fast-path stats: {}", stats);
-        stats
+        mem::take(&mut self.fast_path_stats)
     }
 
     /// Start calibration

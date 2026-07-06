@@ -57,11 +57,9 @@ where
                 .append_suffix(accsync.log_sync.suffix, accsync.log_sync.sync_idx);
 
             // Accept all the undecided slots after the decided index
-            for (slot_idx, log_entry) in (accsync.decided_idx..).zip(
-                self.internal_storage
-                    .get_suffix(accsync.decided_idx)
-                    .into_iter(),
-            ) {
+            for (slot_idx, log_entry) in
+                (accsync.decided_idx..).zip(self.internal_storage.get_suffix(accsync.decided_idx))
+            {
                 if let LogEntry::Undecided(entry, accept_status) = log_entry {
                     let accepted = Accepted {
                         n: accsync.n,
@@ -100,6 +98,8 @@ where
         };
         self.send_to_all_peers(PaxosMsg::Accept(acc));
 
+        #[cfg(not(feature = "adaptive"))]
+        self.pending_proposals.insert(slot_idx, entry.clone());
         #[cfg(feature = "adaptive")]
         self.pending_proposals
             .insert(slot_idx, (entry.clone(), Some(features)));
@@ -115,8 +115,7 @@ where
     }
 
     pub(crate) fn handle_fast_accept(&mut self, acc: Accept<T>) {
-        if self.check_valid_ballot(acc.n)
-            && self.state.1 == Phase::Accept
+        if self.state.1 == Phase::Accept
             // Fast Accepts should never override
             && self.internal_storage.slot_is_empty(acc.slot_idx)
         {
@@ -202,7 +201,7 @@ where
     }
 
     pub(crate) fn handle_test_accept(&mut self, acc: Accept<T>, from: NodeId) {
-        if self.check_valid_ballot(acc.n) && self.state.1 == Phase::Accept {
+        if self.state.1 == Phase::Accept {
             #[cfg(feature = "logging")]
             {
                 debug!(
@@ -245,8 +244,10 @@ where
                 }
             }
             // Check if this node proposed something for this slot
-            #[cfg(feature = "adaptive")]
             if let Some(own_proposed_entry_at_slot) = self.pending_proposals.remove(&dec.slot_idx) {
+                #[cfg(not(feature = "adaptive"))]
+                let own_entry = own_proposed_entry_at_slot;
+                #[cfg(feature = "adaptive")]
                 let (own_entry, features) = own_proposed_entry_at_slot;
                 if dec.accept_status == AcceptStatus::FastAccept && own_entry == dec.entry {
                     // Update fast-path success meta-data

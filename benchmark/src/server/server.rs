@@ -9,16 +9,17 @@ use log::*;
 use omnipaxos::{
     OmniPaxos, OmniPaxosConfig,
     messages::Message,
-    utils::{AcceptStatus, LogEntry, NodeId},
+    utils::{AcceptStatus, LogEntry, NodeId, create_logger},
 };
 use std::{fs::File, io::Write, time::Duration};
-use tokio::net::UnixStream;
-use tokio::signal::unix::{SignalKind, signal};
+use tokio::{
+    net::UnixStream,
+    signal::unix::{SignalKind, signal},
+};
 
-const NETWORK_BATCH_SIZE: usize = 100;
 const LEADER_WAIT: Duration = Duration::from_secs(1);
 const ELECTION_TIMEOUT: Duration = Duration::from_secs(1);
-const GET_SYSTEM_INFO_INTERVAL: Duration = Duration::from_secs(10);
+const GET_SYSTEM_INFO_INTERVAL: Duration = Duration::from_secs(60);
 
 pub struct OmniPaxosServer {
     id: NodeId,
@@ -29,8 +30,11 @@ pub struct OmniPaxosServer {
     current_decided_idx: usize,
     omnipaxos_msg_buffer: Vec<Message<Command>>,
     config: ServerConfig,
-    #[cfg(feature = "adaptive")]
     start_time: Option<i64>,
+    // For overhead eval
+    append_count: u64,
+    append_total_time_ns: u64,
+    // For offline calibration schedule
     #[cfg(feature = "adaptive")]
     calibration_time: Option<i64>,
     #[cfg(feature = "adaptive")]
@@ -64,14 +68,15 @@ impl OmniPaxosServer {
         OmniPaxosServer {
             id: config.server_id,
             database: Database::new(),
-            ipc_rx: ipc_rx.ready_chunks(NETWORK_BATCH_SIZE),
+            ipc_rx: ipc_rx.ready_chunks(100),
             ipc_tx,
             omnipaxos,
             current_decided_idx: 0,
             omnipaxos_msg_buffer,
             config,
-            #[cfg(feature = "adaptive")]
             start_time: None,
+            append_count: 0,
+            append_total_time_ns: 0,
             #[cfg(feature = "adaptive")]
             calibration_time: None,
             #[cfg(feature = "adaptive")]
@@ -88,20 +93,29 @@ impl OmniPaxosServer {
         let mut sigterm = signal(SignalKind::terminate()).expect("Failed install SIGTERM handler");
         let mut sigint = signal(SignalKind::interrupt()).expect("Failed install SIGINT handler");
 
+        let logger = create_logger(&self.config.output_filepath);
+
+        let start_time_ms = self
+            .start_time
+            .expect("Start time should be set by establish_initial_leader");
+        let delay_ms = start_time_ms.saturating_sub(Utc::now().timestamp_millis()) as u64;
+        let start_instant = tokio::time::Instant::now() + Duration::from_millis(delay_ms);
+
         // Main event loop with leader election
         let mut election_interval = tokio::time::interval(ELECTION_TIMEOUT);
-        let mut info_interval = tokio::time::interval(GET_SYSTEM_INFO_INTERVAL);
+        let mut info_interval = tokio::time::interval_at(
+            start_instant + GET_SYSTEM_INFO_INTERVAL,
+            GET_SYSTEM_INFO_INTERVAL,
+        );
 
         loop {
             tokio::select! {
                 _ = sigint.recv() => {
                     info!("SIGINT received");
-                    self.omnipaxos.take_fast_path_stats();
                     break;
                 }
                 _ = sigterm.recv() => {
                     info!("SIGTERM received");
-                    self.omnipaxos.take_fast_path_stats();
                     break;
                 }
                 _ = election_interval.tick() => {
@@ -113,18 +127,25 @@ impl OmniPaxosServer {
                             info!("{}: Triggering OmniPaxos calibration start {}/{}",
                                 self.id, self.calibration_index + 1, schedule.len());
 
-                            self.omnipaxos.take_fast_path_stats();
+                            // Time start_calibration
+                            let start_inst = std::time::Instant::now();
                             self.omnipaxos.start_calibration();
-                            self.is_calibrating = true;
+                            let duration = start_inst.elapsed();
+                            slog::info!(logger, "start_calibration execution time: {:?}", duration);
 
+                            self.is_calibrating = true;
                             let duration = schedule[self.calibration_index].duration_ms;
                             self.calibration_time = Some(Utc::now().timestamp_millis() + duration as i64);
                         } else {
                             info!("{}: Triggering OmniPaxos calibration end {}/{}",
                                 self.id, self.calibration_index + 1, schedule.len());
 
-                            self.omnipaxos.take_fast_path_stats();
+                            // Time end_calibration
+                            let start_inst = std::time::Instant::now();
                             self.omnipaxos.end_calibration();
+                            let duration = start_inst.elapsed();
+                            slog::info!(logger, "end_calibration execution time: {:?}", duration);
+
                             self.is_calibrating = false;
                             self.calibration_index += 1;
 
@@ -138,9 +159,30 @@ impl OmniPaxosServer {
                     }
                 },
                 _ = info_interval.tick() => {
+                    // Track fast path utilization and success
+                    let fast_path_stats = self.omnipaxos.take_fast_path_stats();
+                    slog::info!(logger, "{}", fast_path_stats);
+
+                    // Track execution time of appending
+                    let avg_time_ns = if self.append_count > 0 {
+                        self.append_total_time_ns / self.append_count
+                    } else {
+                        0
+                    };
+                    slog::info!(
+                        logger,
+                        "Append performance over last minute - Count: {}, Avg Time: {} ns",
+                        self.append_count,
+                        avg_time_ns
+                    );
+                    self.append_count = 0;
+                    self.append_total_time_ns = 0;
+
+                    // Track latencies (for consistency check)
                     #[cfg(feature = "adaptive")]
                     {
-                        self.omnipaxos.get_current_latencies();
+                        let latencies = self.omnipaxos.get_current_latencies();
+                        slog::info!(logger, "Current latencies: {:?}", latencies);
                     }
                 },
                 msg_opt = self.ipc_rx.next() => {
@@ -164,10 +206,10 @@ impl OmniPaxosServer {
                     if let Some((curr_leader, true)) = self.omnipaxos.get_current_leader() && curr_leader == self.id {
                         info!("{}: Leader fully initialized", self.id);
                         let experiment_sync_start = (Utc::now() + Duration::from_secs(30)).timestamp_millis();
+                        self.start_time = Some(experiment_sync_start);
                         #[cfg(feature = "adaptive")]
                         if let Some(first_window) = self.config.calibration_schedule.first() {
                             self.calibration_time = Some(experiment_sync_start + first_window.start_delay_ms as i64);
-                            self.start_time = Some(experiment_sync_start);
                         }
                         let msg = ServerToDaemon::StartExperiment(experiment_sync_start);
                         let _ = self.ipc_tx.feed(msg).await;
@@ -219,15 +261,21 @@ impl OmniPaxosServer {
                         id: command_id,
                         kv_cmd: kv_command,
                     };
-                    self.omnipaxos.append(command)
+                    // Time the append execution
+                    let start_append = std::time::Instant::now();
+                    self.omnipaxos.append(command);
+                    let duration = start_append.elapsed();
+
+                    self.append_count += 1;
+                    self.append_total_time_ns += duration.as_nanos() as u64;
                 }
-                Ok(DaemonToServer::StartExperiment(_start_time)) => {
+                Ok(DaemonToServer::StartExperiment(start_time)) => {
                     received_start_signal = true;
+                    self.start_time = Some(start_time);
                     #[cfg(feature = "adaptive")]
                     if let Some(first_window) = self.config.calibration_schedule.first() {
-                        self.start_time = Some(_start_time);
                         self.calibration_time =
-                            Some(_start_time + first_window.start_delay_ms as i64);
+                            Some(start_time + first_window.start_delay_ms as i64);
                     }
                 }
                 Err(e) => {

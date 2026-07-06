@@ -136,10 +136,6 @@ where
             .internal_storage
             .add_entry(LogEntry::Undecided(entry.clone(), accept_status));
 
-        #[cfg(feature = "adaptive")]
-        self.pending_proposals
-            .insert(slot_idx, (entry.clone(), None));
-
         // Send Accept messages
         for pid in self.leader_state.get_promised_followers() {
             let acc = Accept {

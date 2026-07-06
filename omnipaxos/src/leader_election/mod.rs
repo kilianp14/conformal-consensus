@@ -291,16 +291,6 @@ impl BallotLeaderElection {
         let mut latencies = HashMap::with_capacity(self.peers.len());
         for node_id in &self.peers {
             let latency = self.get_node_latency_avg(*node_id);
-            #[cfg(feature = "logging")]
-            {
-                slog::info!(
-                    self.logger,
-                    "Latency from {} to {}: {:?}",
-                    self.pid,
-                    node_id,
-                    latency
-                );
-            }
             latencies.insert(*node_id, latency);
         }
         latencies

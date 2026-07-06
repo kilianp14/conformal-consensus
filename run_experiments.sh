@@ -1,25 +1,37 @@
 #!/bin/bash
+if [ "$#" -ne 1 ] || { [ "$1" != "europe" ] && [ "$1" != "us" ]; }; then
+  echo "Usage: $0 [europe|us]"
+  exit 1
+fi
+
+DEPLOY_REGION=$1
 
 PROJECT_ID="conformal-consensus"
-CLIENT_IMAGE="europe-docker.pkg.dev/conformal-consensus/docker-images-europe/client:latest"
-GEO_REGION="${1:-europe}"
+CLIENT_IMAGE="${DEPLOY_REGION}-docker.pkg.dev/conformal-consensus/docker-images-${DEPLOY_REGION}/client:latest"
 
 EXPERIMENTS=(
-  "heuristic_adaptive localevents --retry 0.1 0.005"
+  # Latency experiments
   "crc_adaptive localevents --retry 0.1 0.005"
   "crc_adaptive localevents --retry 0.05 0.005"
   "crc_adaptive localevents --retry 0.01 0.005"
   "fast localevents --retry 0.1 0.005"
   "normal localevents --retry 0.1 0.005"
+  # Risk guarantee validity
+  "crc_adaptive localevents --retry 0.2 0.005"
+  "crc_adaptive localevents --retry 0.3 0.005"
+  "crc_adaptive localevents --retry 0.4 0.005"
+  "crc_adaptive localevents --retry 0.5 0.005"
+  # Score function validity
+  "heuristic_adaptive localevents --no-retry 0.1 0.005"
 )
 
-echo "Fetching instances for region: $GEO_REGION..."
+echo "Fetching instances for region: $DEPLOY_REGION..."
 INSTANCES=$(gcloud compute instances list \
-  --filter="labels.experiment=omnipaxos AND labels.geo=$GEO_REGION" \
+  --filter="labels.experiment=omnipaxos AND labels.geo=$DEPLOY_REGION" \
   --format="csv[no-heading](name,zone)")
 
 if [ -z "$INSTANCES" ]; then
-  echo "Error: No instances found with labels.experiment=omnipaxos and labels.geo=$GEO_REGION"
+  echo "Error: No instances found with labels.experiment=omnipaxos and labels.geo=$DEPLOY_REGION"
   exit 1
 fi
 
@@ -31,9 +43,9 @@ for EXP in "${EXPERIMENTS[@]}"; do
   else
     SERVER_IMAGE_TAG="server"
   fi
-  SERVER_IMAGE="europe-docker.pkg.dev/conformal-consensus/docker-images-europe/$SERVER_IMAGE_TAG:latest"
+  SERVER_IMAGE="$DEPLOY_REGION-docker.pkg.dev/conformal-consensus/docker-images-$DEPLOY_REGION/$SERVER_IMAGE_TAG:latest"
 
-  RUN_ID="${MODE}_${LOAD}_${RETRY_FLAG//--/}_risk${RISK}_lr${LR}"
+  RUN_ID="${MODE}_${LOAD}_${RETRY_FLAG//--/}_risk${RISK}_lr${LR}_region${DEPLOY_REGION}"
   echo "=========================================================================="
   echo "Starting Experiment: $RUN_ID"
   echo "=========================================================================="

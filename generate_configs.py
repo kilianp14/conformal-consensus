@@ -94,13 +94,6 @@ def get_instances():
 def main(mode, load, retry: bool, risk: float, learning_rate: float):
     instances = sorted(get_instances(), key=lambda x: x["name"])
 
-    # Move the wanted leader to the back
-    target_name = "node-eu-europe-west3"
-    for i, instance in enumerate(instances):
-        if instance["name"] == target_name:
-            instances.append(instances.pop(i))
-            break
-
     for inst in instances:
         print(inst["name"])
 
@@ -109,14 +102,13 @@ def main(mode, load, retry: bool, risk: float, learning_rate: float):
 
     for i, inst in enumerate(instances):
         name = inst["name"]
-        node_id = i + 1
 
         server_cfg = {
             "nodes": nodes,
             "initial_leader": nodes[len(nodes) - 1],
             "num_clients": NUM_CLIENTS_PER_NODE,
-            "output_filepath": f"{OUTPUT_DIR}/server_{node_id}.log",
-            "paxos_output_filepath": f"{OUTPUT_DIR}/paxos_{node_id}.log",
+            "output_filepath": f"{OUTPUT_DIR}/server_{name}.log",
+            "paxos_output_filepath": f"{OUTPUT_DIR}/paxos_{name}.log",
             "mode": "FastPaxos" if mode == "fast" else "OmniPaxos",
             "enable_retry": retry,
             "risk_level": risk,
@@ -137,17 +129,24 @@ def main(mode, load, retry: bool, risk: float, learning_rate: float):
                     for r in range(CALIBRATION_ROUNDS)
                 ]
             )
+        # Special nodes that should always be conservative
+        if name in ["node-us-west1", "node-us-west2"] and mode in [
+            "heuristic_adaptive",
+            "crc_adaptive",
+        ]:
+            server_cfg["calibration_schedule"] = []
+            server_cfg["risk_level"]: 0.0
+
         with open(f"configs/server_{name}.toml", "w") as f:
             f.write(to_toml(server_cfg))
 
         client_cfg = {
-            "server_id": node_id,
             "server_address": f"127.0.0.1:{PORT}",
             "read_ratio": READ_RATIO,
             "max_duration_sec": WARMUP_DURATION + EXPERIMENT_DURATION,
-            "seed": node_id,
-            "summary_filepath": f"{OUTPUT_DIR}/client_{node_id}_summary.log",
-            "output_filepath": f"{OUTPUT_DIR}/client_{node_id}.log",
+            "seed": 14,
+            "summary_filepath": f"{OUTPUT_DIR}/clientsummary_{name}.log",
+            "output_filepath": f"{OUTPUT_DIR}/client_{name}.log",
             "load_pattern": LOAD_PATTERNS[load],
         }
         if mode == "crc_adaptive":
