@@ -9,19 +9,8 @@ NUM_CLIENTS_PER_NODE = 1
 OUTPUT_DIR = "/app/results"
 READ_RATIO = 0.5
 WARMUP_DURATION = 1 * 60  # 1 minute
-EXPERIMENT_DURATION = 10 * 60  # 10 minutes
-CALIBRATION_ROUNDS = 1
-CALIBRATION_DURATION = 5 * 60  # 5 minutes (only for offline calibration)
 
 LOAD_PATTERNS = {
-    "cyclic": {
-        "type": "Cyclic",
-        "highest_rps": 10,
-        "lowest_rps": 1,
-        "period_sec": 60,
-        "offset_sec": 0,
-        "jitter": 0.5,
-    },
     "localevents": {
         "type": "RandomBursts",
         "base_rps": 0,
@@ -91,7 +80,15 @@ def get_instances():
         return []
 
 
-def main(mode, load, retry: bool, risk: float, learning_rate: float):
+def main(
+    mode,
+    load,
+    retry: bool,
+    risk: float,
+    learning_rate: float,
+    experiment_duration: int,
+    calibration_duration: int,
+):
     instances = sorted(get_instances(), key=lambda x: x["name"])
 
     for inst in instances:
@@ -122,11 +119,9 @@ def main(mode, load, retry: bool, risk: float, learning_rate: float):
                 if i == len(instances) - 1
                 else [
                     {
-                        "start_delay_ms": (WARMUP_DURATION + r * CALIBRATION_DURATION)
-                        * 1000,
-                        "duration_ms": CALIBRATION_DURATION * 1000,
+                        "start_delay_ms": WARMUP_DURATION * 1000,
+                        "duration_ms": calibration_duration * 1000,
                     }
-                    for r in range(CALIBRATION_ROUNDS)
                 ]
             )
         # Special nodes that should always be conservative
@@ -135,7 +130,7 @@ def main(mode, load, retry: bool, risk: float, learning_rate: float):
             "crc_adaptive",
         ]:
             server_cfg["calibration_schedule"] = []
-            server_cfg["risk_level"]: 0.0
+            server_cfg["risk_level"] = 0.0
 
         with open(f"configs/server_{name}.toml", "w") as f:
             f.write(to_toml(server_cfg))
@@ -143,14 +138,14 @@ def main(mode, load, retry: bool, risk: float, learning_rate: float):
         client_cfg = {
             "server_address": f"127.0.0.1:{PORT}",
             "read_ratio": READ_RATIO,
-            "max_duration_sec": WARMUP_DURATION + EXPERIMENT_DURATION,
-            "seed": 14,
+            "max_duration_sec": WARMUP_DURATION + experiment_duration,
+            "seed": i,
             "summary_filepath": f"{OUTPUT_DIR}/clientsummary_{name}.log",
             "output_filepath": f"{OUTPUT_DIR}/client_{name}.log",
             "load_pattern": LOAD_PATTERNS[load],
         }
         if mode == "crc_adaptive":
-            client_cfg["max_duration_sec"] += CALIBRATION_DURATION * CALIBRATION_ROUNDS
+            client_cfg["max_duration_sec"] += calibration_duration
         with open(f"configs/client_{name}.toml", "w") as f:
             f.write(to_toml(client_cfg))
 
@@ -166,7 +161,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "load",
         type=str,
-        choices=["cyclic", "localevents"],
+        choices=["localevents"],
         help="Choose the client load pattern",
     )
     parser.add_argument(
@@ -187,6 +182,18 @@ if __name__ == "__main__":
         default=0.005,
         help="Learning rate for online calibration",
     )
+    parser.add_argument(
+        "--experiment_duration",
+        type=int,
+        default=600,
+        help="Experiment duration in seconds",
+    )
+    parser.add_argument(
+        "--calibration_duration",
+        type=int,
+        default=300,
+        help="Calibration duration in seconds",
+    )
 
     args = parser.parse_args()
     main(
@@ -195,4 +202,6 @@ if __name__ == "__main__":
         retry=args.retry,
         risk=args.risk,
         learning_rate=args.learning_rate,
+        experiment_duration=args.experiment_duration,
+        calibration_duration=args.calibration_duration,
     )

@@ -23,7 +23,7 @@ fi
 for i in "${!REGIONS[@]}"; do
   REGION="${REGIONS[$i]}"
   INSTANCE_NAME="node-${REGION}"
-  ZONE="${REGION}-b"
+  ZONE="${REGION}-a"
   NODE_ID=$((i + 1))
 
   INSTANCES+=("$INSTANCE_NAME")

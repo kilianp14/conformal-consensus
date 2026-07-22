@@ -9,20 +9,21 @@ DEPLOY_REGION=$1
 PROJECT_ID="conformal-consensus"
 CLIENT_IMAGE="${DEPLOY_REGION}-docker.pkg.dev/conformal-consensus/docker-images-${DEPLOY_REGION}/client:latest"
 
+# Format: "MODE LOAD RETRY_FLAG RISK-LEVEL LEARNING-RATE EXPERIMENT-DURATION CALIBRATION-DURATION"
 EXPERIMENTS=(
   # Latency experiments
-  "crc_adaptive localevents --retry 0.1 0.005"
-  "crc_adaptive localevents --retry 0.05 0.005"
-  "crc_adaptive localevents --retry 0.01 0.005"
-  "fast localevents --retry 0.1 0.005"
-  "normal localevents --retry 0.1 0.005"
+  # "crc_adaptive localevents --retry 0.1 0.005 600 300"
+  # "crc_adaptive localevents --retry 0.05 0.005 600 300"
+  # "crc_adaptive localevents --retry 0.01 0.005 600 300"
+  # "fast localevents --retry 0.1 0.005 600 300"
+  # "normal localevents --retry 0.1 0.005 600 300"
   # Risk guarantee validity
-  "crc_adaptive localevents --retry 0.2 0.005"
-  "crc_adaptive localevents --retry 0.3 0.005"
-  "crc_adaptive localevents --retry 0.4 0.005"
-  "crc_adaptive localevents --retry 0.5 0.005"
+  # "crc_adaptive localevents --retry 0.2 0.005 600 300"
+  # "crc_adaptive localevents --retry 0.3 0.005 600 300"
+  # "crc_adaptive localevents --retry 0.4 0.005 600 300"
+  # "crc_adaptive localevents --retry 0.5 0.005 600 300"
   # Score function validity
-  "heuristic_adaptive localevents --no-retry 0.1 0.005"
+  # "heuristic_adaptive localevents --no-retry 0.1 0.005 600 300"
 )
 
 echo "Fetching instances for region: $DEPLOY_REGION..."
@@ -36,7 +37,7 @@ if [ -z "$INSTANCES" ]; then
 fi
 
 for EXP in "${EXPERIMENTS[@]}"; do
-  read -r MODE LOAD RETRY_FLAG RISK LR <<<"$EXP"
+  read -r MODE LOAD RETRY_FLAG RISK LR EXP_DUR CAL_DUR <<<"$EXP"
 
   if [ "$MODE" == "heuristic_adaptive" ] || [ "$MODE" == "crc_adaptive" ]; then
     SERVER_IMAGE_TAG="server-adaptive"
@@ -45,12 +46,12 @@ for EXP in "${EXPERIMENTS[@]}"; do
   fi
   SERVER_IMAGE="$DEPLOY_REGION-docker.pkg.dev/conformal-consensus/docker-images-$DEPLOY_REGION/$SERVER_IMAGE_TAG:latest"
 
-  RUN_ID="${MODE}_${LOAD}_${RETRY_FLAG//--/}_risk${RISK}_lr${LR}_region${DEPLOY_REGION}"
+  RUN_ID="${MODE}_${LOAD}_${RETRY_FLAG//--/}_risk${RISK}_lr${LR}_dur${EXP_DUR}_cal${CAL_DUR}_region${DEPLOY_REGION}"
   echo "=========================================================================="
   echo "Starting Experiment: $RUN_ID"
   echo "=========================================================================="
 
-  python3 generate_configs.py "$MODE" "$LOAD" "$RETRY_FLAG" --risk "$RISK" --learning_rate "$LR"
+  python3 generate_configs.py "$MODE" "$LOAD" "$RETRY_FLAG" --risk "$RISK" --learning_rate "$LR" --experiment_duration "$EXP_DUR" --calibration_duration "$CAL_DUR"
 
   while IFS=',' read -r NAME ZONE <&3; do
     gcloud compute scp \
