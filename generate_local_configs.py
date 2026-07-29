@@ -1,10 +1,8 @@
-import subprocess
-import json
 import os
 import argparse
 
 EXPERIMENT_LABEL = "experiment=omnipaxos"
-PORT = 8000
+BASE_PORT = 8000
 NUM_CLIENTS_PER_NODE = 1
 OUTPUT_DIR = "/app/results"
 READ_RATIO = 0.5
@@ -15,8 +13,8 @@ LOAD_PATTERNS = {
         "type": "RandomBursts",
         "base_rps": 0,
         "burst_rps": 50,
-        "avg_interval_sec": 20,
-        "interval_std_dev_sec": 10,
+        "avg_interval_sec": 30,
+        "interval_std_dev_sec": 15,
         "decay_rate": 0.5,
         "jitter": 0.5,
     },
@@ -63,43 +61,26 @@ def to_toml(data, prefix="") -> str:
     return "\n".join(lines).strip()
 
 
-def get_instances():
-    cmd = [
-        "gcloud",
-        "compute",
-        "instances",
-        "list",
-        f"--filter=labels.{EXPERIMENT_LABEL}",
-        "--format=json",
-    ]
-    try:
-        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        return json.loads(res.stdout)
-    except Exception as e:
-        print(f"Error fetching instances: {e}")
-        return []
-
-
 def main(
     mode,
     load,
     retry: bool,
+    nodes_str: str,
     risk: float,
     learning_rate: float,
     experiment_duration: int,
     calibration_duration: int,
 ):
-    instances = sorted(get_instances(), key=lambda x: x["name"])
+    node_names = sorted(nodes_str.split(","))
 
-    for inst in instances:
-        print(inst["name"])
+    for name in node_names:
+        print(name)
 
-    nodes = [i + 1 for i in range(len(instances))]
+    nodes = [i + 1 for i in range(len(node_names))]
     os.makedirs("configs", exist_ok=True)
 
-    for i, inst in enumerate(instances):
-        name = inst["name"]
-
+    for i, name in enumerate(node_names):
+        port = BASE_PORT + i
         server_cfg = {
             "nodes": nodes,
             "initial_leader": nodes[len(nodes) - 1],
@@ -114,18 +95,19 @@ def main(
         if mode == "heuristic_adaptive":
             server_cfg["calibration_schedule"] = []
         if mode == "crc_adaptive":
-            server_cfg["calibration_schedule"] = (
-                []
-                if i == len(instances) - 1
-                else [
-                    {
-                        "start_delay_ms": WARMUP_DURATION * 1000,
-                        "duration_ms": calibration_duration * 1000,
-                    }
-                ]
-            )
+            server_cfg["calibration_schedule"] = [
+                {
+                    "start_delay_ms": WARMUP_DURATION * 1000,
+                    "duration_ms": calibration_duration * 1000,
+                }
+            ]
         # Special nodes that should always be conservative
-        if name in ["node-us-west1", "node-us-west2"] and mode in [
+        if name in [
+            "node-us-west1",
+            "node-us-west2",
+            "node-us-west4",
+            "node-europe-west3",
+        ] and mode in [
             "heuristic_adaptive",
             "crc_adaptive",
         ]:
@@ -136,7 +118,7 @@ def main(
             f.write(to_toml(server_cfg))
 
         client_cfg = {
-            "server_address": f"127.0.0.1:{PORT}",
+            "server_address": f"127.0.0.1:{port}",
             "read_ratio": READ_RATIO,
             "max_duration_sec": WARMUP_DURATION + experiment_duration,
             "seed": i,
@@ -194,12 +176,19 @@ if __name__ == "__main__":
         default=300,
         help="Calibration duration in seconds",
     )
+    parser.add_argument(
+        "--nodes",
+        type=str,
+        required=True,
+        help="Comma-separated list of node names",
+    )
 
     args = parser.parse_args()
     main(
         mode=args.mode,
         load=args.load,
         retry=args.retry,
+        nodes_str=args.nodes,
         risk=args.risk,
         learning_rate=args.learning_rate,
         experiment_duration=args.experiment_duration,

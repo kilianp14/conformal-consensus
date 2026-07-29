@@ -1,10 +1,35 @@
 #!/bin/bash
-if [ "$#" -ne 1 ] || { [ "$1" != "europe" ] && [ "$1" != "us" ]; }; then
-  echo "Usage: $0 [europe|us]"
+
+SINGLE_REGION=false
+DEPLOY_REGION=""
+
+# Parse arguments
+for arg in "$@"; do
+  case $arg in
+  --single-region)
+    SINGLE_REGION=true
+    ;;
+  europe | us)
+    DEPLOY_REGION="$arg"
+    ;;
+  *)
+    echo "Unknown argument: $arg"
+    echo "Usage: $0 [europe|us] [--single-region]"
+    exit 1
+    ;;
+  esac
+done
+
+if [ -z "$DEPLOY_REGION" ]; then
+  echo "Usage: $0 [europe|us] [--single-region]"
   exit 1
 fi
 
-DEPLOY_REGION=$1
+if [ "$SINGLE_REGION" = true ]; then
+  DEPLOY_TYPE="regional"
+else
+  DEPLOY_TYPE="distributed"
+fi
 
 PROJECT_ID="conformal-consensus"
 CLIENT_IMAGE="${DEPLOY_REGION}-docker.pkg.dev/conformal-consensus/docker-images-${DEPLOY_REGION}/client:latest"
@@ -12,27 +37,34 @@ CLIENT_IMAGE="${DEPLOY_REGION}-docker.pkg.dev/conformal-consensus/docker-images-
 # Format: "MODE LOAD RETRY_FLAG RISK-LEVEL LEARNING-RATE EXPERIMENT-DURATION CALIBRATION-DURATION"
 EXPERIMENTS=(
   # Latency experiments
-  # "crc_adaptive localevents --retry 0.1 0.005 600 300"
-  # "crc_adaptive localevents --retry 0.05 0.005 600 300"
-  # "crc_adaptive localevents --retry 0.01 0.005 600 300"
-  # "fast localevents --retry 0.1 0.005 600 300"
-  # "normal localevents --retry 0.1 0.005 600 300"
+  "fast localevents --retry 0.1 0.005 600 300"
+  "normal localevents --retry 0.1 0.005 600 300"
+  "crc_adaptive localevents --retry 0.1 0.005 600 300"
+  "crc_adaptive localevents --retry 0.05 0.005 600 300"
+  "crc_adaptive localevents --retry 0.01 0.005 600 300"
   # Risk guarantee validity
-  # "crc_adaptive localevents --retry 0.2 0.005 600 300"
-  # "crc_adaptive localevents --retry 0.3 0.005 600 300"
-  # "crc_adaptive localevents --retry 0.4 0.005 600 300"
-  # "crc_adaptive localevents --retry 0.5 0.005 600 300"
+  "crc_adaptive localevents --retry 0.2 0.005 600 300"
+  "crc_adaptive localevents --retry 0.3 0.005 600 300"
+  "crc_adaptive localevents --retry 0.4 0.005 600 300"
+  "crc_adaptive localevents --retry 0.5 0.005 600 300"
   # Score function validity
-  # "heuristic_adaptive localevents --no-retry 0.1 0.005 600 300"
+  "heuristic_adaptive localevents --no-retry 0.1 0.005 600 300"
+  "heuristic_adaptive localevents --no-retry 0.2 0.005 600 300"
+  # # Overhead (Calibration)
+  # "crc_adaptive localevents --retry 0.1 0.005 60 100"
+  # "crc_adaptive localevents --retry 0.1 0.005 60 300"
+  # "crc_adaptive localevents --retry 0.1 0.005 60 500"
+  # "crc_adaptive localevents --retry 0.1 0.005 60 700"
+  # "crc_adaptive localevents --retry 0.1 0.005 60 900"
 )
 
-echo "Fetching instances for region: $DEPLOY_REGION..."
+echo "Fetching instances for region: $DEPLOY_REGION"
 INSTANCES=$(gcloud compute instances list \
-  --filter="labels.experiment=omnipaxos AND labels.geo=$DEPLOY_REGION" \
+  --filter="labels.experiment=omnipaxos AND labels.geo=$DEPLOY_REGION AND labels.deploy=$DEPLOY_TYPE" \
   --format="csv[no-heading](name,zone)")
 
 if [ -z "$INSTANCES" ]; then
-  echo "Error: No instances found with labels.experiment=omnipaxos and labels.geo=$DEPLOY_REGION"
+  echo "Error: No instances found with labels.experiment=omnipaxos, labels.geo=$DEPLOY_REGION, and labels.deploy=$DEPLOY_TYPE"
   exit 1
 fi
 
@@ -46,12 +78,18 @@ for EXP in "${EXPERIMENTS[@]}"; do
   fi
   SERVER_IMAGE="$DEPLOY_REGION-docker.pkg.dev/conformal-consensus/docker-images-$DEPLOY_REGION/$SERVER_IMAGE_TAG:latest"
 
-  RUN_ID="${MODE}_${LOAD}_${RETRY_FLAG//--/}_risk${RISK}_lr${LR}_dur${EXP_DUR}_cal${CAL_DUR}_region${DEPLOY_REGION}"
+  RUN_ID="${MODE}_${LOAD}_${RETRY_FLAG//--/}_risk${RISK}_lr${LR}_dur${EXP_DUR}_cal${CAL_DUR}_region${DEPLOY_REGION}_deploy${DEPLOY_TYPE}"
   echo "=========================================================================="
   echo "Starting Experiment: $RUN_ID"
   echo "=========================================================================="
 
-  python3 generate_configs.py "$MODE" "$LOAD" "$RETRY_FLAG" --risk "$RISK" --learning_rate "$LR" --experiment_duration "$EXP_DUR" --calibration_duration "$CAL_DUR"
+  NODE_NAMES=$(echo "$INSTANCES" | cut -d',' -f1 | paste -sd, -)
+  python3 generate_local_configs.py "$MODE" "$LOAD" "$RETRY_FLAG" \
+    --nodes "$NODE_NAMES" \
+    --risk "$RISK" \
+    --learning_rate "$LR" \
+    --experiment_duration "$EXP_DUR" \
+    --calibration_duration "$CAL_DUR"
 
   while IFS=',' read -r NAME ZONE <&3; do
     gcloud compute scp \

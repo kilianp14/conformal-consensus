@@ -13,7 +13,9 @@ use tokio::net::{
 use tokio_serde::{Framed, formats::Bincode};
 use tokio_util::codec::{Framed as CodecFramed, FramedRead, FramedWrite, LengthDelimitedCodec};
 
-pub const IPC_SOCKET_PATH: &str = "/tmp/omnipaxos-ipc.sock";
+pub fn get_ipc_socket_path(node_id: NodeId) -> String {
+    format!("/tmp/omnipaxos-ipc-{}.sock", node_id)
+}
 
 pub type CommandId = usize;
 pub type ClientId = u64;

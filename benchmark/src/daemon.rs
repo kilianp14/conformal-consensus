@@ -1,7 +1,8 @@
 use benchmark::common::{
-    ClientId, DaemonToDaemon, DaemonToServer, IPC_SOCKET_PATH, NodeId, RegistrationMessage,
-    ServerToDaemon, Timestamp, ToClient, frame_cluster_connection, frame_ipc_daemon_side,
-    frame_registration_connection, frame_servers_connection, resolve_addr_with_retry,
+    ClientId, DaemonToDaemon, DaemonToServer, NodeId, RegistrationMessage, ServerToDaemon,
+    Timestamp, ToClient, frame_cluster_connection, frame_ipc_daemon_side,
+    frame_registration_connection, frame_servers_connection, get_ipc_socket_path,
+    resolve_addr_with_retry,
 };
 use config::{Config, File};
 use futures::{SinkExt, StreamExt};
@@ -18,11 +19,13 @@ use std::{
 use tokio::{
     net::{TcpListener, TcpStream, UnixListener},
     sync::mpsc::{self, UnboundedSender},
+    time::Instant,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ClusterConfig {
     pub node_addrs: Vec<(NodeId, String)>,
+    pub latencies_ms: Option<HashMap<NodeId, HashMap<NodeId, u64>>>,
 }
 
 #[tokio::main]
@@ -51,7 +54,7 @@ pub async fn main() {
 #[derive(Default)]
 struct DaemonState {
     server_tx: Option<UnboundedSender<DaemonToServer>>,
-    peer_txs: HashMap<NodeId, UnboundedSender<DaemonToDaemon>>,
+    peer_txs: HashMap<NodeId, UnboundedSender<(Instant, DaemonToDaemon)>>,
     client_txs: HashMap<ClientId, UnboundedSender<ToClient>>,
     next_client_id: ClientId,
     start_time: Option<Timestamp>,
@@ -83,10 +86,11 @@ pub async fn run_daemon(config: ClusterConfig, node_id: NodeId) {
 
     // Spawn IPC (Unix Socket) Listener for the local Server container
     let state_clone = state.clone();
+    let ipc_path = get_ipc_socket_path(node_id);
     tokio::spawn(async move {
-        let _ = std::fs::remove_file(IPC_SOCKET_PATH);
-        let listener = UnixListener::bind(IPC_SOCKET_PATH).expect("Failed to bind to IPC socket");
-        info!("Listening for local server on UDS: {}", IPC_SOCKET_PATH);
+        let _ = std::fs::remove_file(&ipc_path);
+        let listener = UnixListener::bind(&ipc_path).expect("Failed to bind to IPC socket");
+        info!("Listening for local server on UDS: {}", ipc_path);
 
         loop {
             match listener.accept().await {
@@ -101,6 +105,7 @@ pub async fn run_daemon(config: ClusterConfig, node_id: NodeId) {
 
     // Spawn TCP Listener for external Peers & Clients
     let state_clone = state.clone();
+    let config_clone = config.clone();
     tokio::spawn(async move {
         let listener = TcpListener::bind(listen_address).await.unwrap();
         info!("Listening for peers and clients on TCP: {}", listen_address);
@@ -110,7 +115,12 @@ pub async fn run_daemon(config: ClusterConfig, node_id: NodeId) {
                 Ok((tcp_stream, socket_addr)) => {
                     info!("New TCP connection from {socket_addr}");
                     tcp_stream.set_nodelay(true).unwrap();
-                    handle_incoming_tcp(tcp_stream, state_clone.clone());
+                    handle_incoming_tcp(
+                        tcp_stream,
+                        state_clone.clone(),
+                        config_clone.clone(),
+                        node_id,
+                    );
                 }
                 Err(e) => error!("TCP accept error: {:?}", e),
             }
@@ -123,6 +133,15 @@ pub async fn run_daemon(config: ClusterConfig, node_id: NodeId) {
         .filter(|(peer_id, _)| *peer_id < node_id);
     for (peer_id, peer_address) in peers_to_connect_to {
         let state_clone = state.clone();
+
+        // Extract optional configured delay for this peer relationship
+        let delay = config
+            .latencies_ms
+            .as_ref()
+            .and_then(|l| l.get(&node_id))
+            .and_then(|l| l.get(&peer_id))
+            .copied();
+
         tokio::spawn(async move {
             let mut reconnect_interval = tokio::time::interval(Duration::from_secs(1));
             loop {
@@ -139,7 +158,7 @@ pub async fn run_daemon(config: ClusterConfig, node_id: NodeId) {
                             .is_ok()
                         {
                             let stream = registration.into_inner().into_inner();
-                            spawn_peer_tasks(peer_id, stream, state_clone.clone());
+                            spawn_peer_tasks(peer_id, stream, state_clone.clone(), delay);
                             break;
                         }
                     }
@@ -182,9 +201,10 @@ fn handle_ipc_connection(stream: tokio::net::UnixStream, state: Arc<Mutex<Daemon
                     info!("Server initiated experiment start at {}", start_time);
                     st.start_time = Some(start_time);
 
+                    let now = Instant::now();
                     // Broadcast to all peers
                     for tx in st.peer_txs.values() {
-                        let _ = tx.send(DaemonToDaemon::StartExperiment(start_time));
+                        let _ = tx.send((now, DaemonToDaemon::StartExperiment(start_time)));
                     }
                     // Serve to all currently connected clients
                     for tx in st.client_txs.values() {
@@ -193,7 +213,10 @@ fn handle_ipc_connection(stream: tokio::net::UnixStream, state: Arc<Mutex<Daemon
                 }
                 ServerToDaemon::Cluster(node_id, cluster_msg) => {
                     if let Some(tx) = st.peer_txs.get(&node_id) {
-                        let _ = tx.send(DaemonToDaemon::OmniPaxosMessage(cluster_msg));
+                        let _ = tx.send((
+                            Instant::now(),
+                            DaemonToDaemon::OmniPaxosMessage(cluster_msg),
+                        ));
                     }
                 }
                 ServerToDaemon::Client(client_id, server_msg) => {
@@ -227,15 +250,29 @@ fn handle_ipc_connection(stream: tokio::net::UnixStream, state: Arc<Mutex<Daemon
     });
 }
 
-fn handle_incoming_tcp(connection: TcpStream, state: Arc<Mutex<DaemonState>>) {
+fn handle_incoming_tcp(
+    connection: TcpStream,
+    state: Arc<Mutex<DaemonState>>,
+    config: ClusterConfig,
+    our_node_id: NodeId,
+) {
     tokio::spawn(async move {
         let mut registration = frame_registration_connection(connection);
 
         match registration.next().await {
-            Some(Ok(RegistrationMessage::NodeRegister(node_id))) => {
-                info!("Registered incoming peer: {}", node_id);
+            Some(Ok(RegistrationMessage::NodeRegister(peer_id))) => {
+                info!("Registered incoming peer: {}", peer_id);
                 let stream = registration.into_inner().into_inner();
-                spawn_peer_tasks(node_id, stream, state);
+
+                // Extract optional configured delay for this peer relationship
+                let delay = config
+                    .latencies_ms
+                    .as_ref()
+                    .and_then(|l| l.get(&our_node_id))
+                    .and_then(|l| l.get(&peer_id))
+                    .copied();
+
+                spawn_peer_tasks(peer_id, stream, state, delay);
             }
             Some(Ok(RegistrationMessage::ClientRegister)) => {
                 let stream = registration.into_inner().into_inner();
@@ -246,9 +283,14 @@ fn handle_incoming_tcp(connection: TcpStream, state: Arc<Mutex<DaemonState>>) {
     });
 }
 
-fn spawn_peer_tasks(peer_id: NodeId, stream: TcpStream, state: Arc<Mutex<DaemonState>>) {
+fn spawn_peer_tasks(
+    peer_id: NodeId,
+    stream: TcpStream,
+    state: Arc<Mutex<DaemonState>>,
+    delay: Option<u64>,
+) {
     let (mut tcp_rx, mut tcp_tx) = frame_cluster_connection(stream);
-    let (peer_tx, mut peer_rx) = mpsc::unbounded_channel::<DaemonToDaemon>();
+    let (peer_tx, mut peer_rx) = mpsc::unbounded_channel::<(Instant, DaemonToDaemon)>();
 
     state.lock().unwrap().peer_txs.insert(peer_id, peer_tx);
 
@@ -285,7 +327,13 @@ fn spawn_peer_tasks(peer_id: NodeId, stream: TcpStream, state: Arc<Mutex<DaemonS
 
     // Writer Task (Server -> Daemon -> Peer)
     tokio::spawn(async move {
-        while let Some(msg) = peer_rx.recv().await {
+        while let Some((enqueue_time, msg)) = peer_rx.recv().await {
+            // Artificial delay injection based on enqueue timestamp
+            if let Some(d) = delay {
+                let target_send_time = enqueue_time + Duration::from_millis(d);
+                tokio::time::sleep_until(target_send_time).await;
+            }
+
             if tcp_tx.send(msg).await.is_err() {
                 break;
             }

@@ -1,11 +1,29 @@
 #!/bin/bash
 
-if [ "$#" -ne 1 ] || { [ "$1" != "europe" ] && [ "$1" != "us" ]; }; then
-  echo "Usage: $0 [europe|us]"
+SINGLE_REGION=false
+DEPLOY_REGION=""
+
+# Parse arguments
+for arg in "$@"; do
+  case $arg in
+  --single-region)
+    SINGLE_REGION=true
+    ;;
+  europe | us)
+    DEPLOY_REGION="$arg"
+    ;;
+  *)
+    echo "Unknown argument: $arg"
+    echo "Usage: $0 [europe|us] [--single-region]"
+    exit 1
+    ;;
+  esac
+done
+
+if [ -z "$DEPLOY_REGION" ]; then
+  echo "Usage: $0 [europe|us] [--single-region]"
   exit 1
 fi
-
-DEPLOY_REGION=$1
 
 PROJECT_ID="conformal-consensus"
 MACHINE_TYPE="e2-standard-4"
@@ -20,11 +38,27 @@ else
   REGIONS=("us-west1" "us-west2" "us-central1" "us-east5" "us-west4")
 fi
 
+if [ "$SINGLE_REGION" = true ]; then
+  DEPLOY_TYPE="regional"
+else
+  DEPLOY_TYPE="distributed"
+fi
+
+INSTANCES=()
+ZONES=()
+NODE_IDS=()
+
 for i in "${!REGIONS[@]}"; do
   REGION="${REGIONS[$i]}"
   INSTANCE_NAME="node-${REGION}"
-  ZONE="${REGION}-a"
   NODE_ID=$((i + 1))
+
+  # If single-region is enabled, deploy all nodes in the last zone
+  if [ "$SINGLE_REGION" = true ]; then
+    ZONE="${REGIONS[-1]}-c"
+  else
+    ZONE="${REGION}-c"
+  fi
 
   INSTANCES+=("$INSTANCE_NAME")
   ZONES+=("$ZONE")
@@ -41,7 +75,7 @@ for i in "${!REGIONS[@]}"; do
     --boot-disk-size=10GB \
     --boot-disk-type=pd-standard \
     --no-restart-on-failure \
-    --labels=experiment=omnipaxos,geo="$DEPLOY_REGION" \
+    --labels=experiment=omnipaxos,geo="$DEPLOY_REGION",deploy="$DEPLOY_TYPE" \
     --scopes=https://www.googleapis.com/auth/cloud-platform \
     --metadata=node_id="$NODE_ID",deploy_region="$DEPLOY_REGION",startup-script='#! /bin/bash
 DEPLOY_REGION=$(curl -s http://metadata.google.internal/computeMetadata/v1/instance/attributes/deploy_region -H "Metadata-Flavor: Google")
@@ -83,24 +117,32 @@ for i in "${!INSTANCES[@]}"; do
   done
 done
 
-echo "Generating cluster configuration..."
-mkdir -p configs
-CLUSTER_FILE="configs/gcp_cluster.toml"
-echo -n "node_addrs = [" >"$CLUSTER_FILE"
+NODE_NAMES=$(
+  IFS=,
+  echo "${INSTANCES[*]}"
+)
 
+NODE_IPS_LIST=()
 for i in "${!INSTANCES[@]}"; do
   INTERNAL_IP=$(gcloud compute instances describe "${INSTANCES[$i]}" \
     --zone="${ZONES[$i]}" --format='get(networkInterfaces[0].networkIP)')
-
-  ENTRY="[${NODE_IDS[$i]}, \"$INTERNAL_IP:8000\"]"
-
-  if [ "$i" -lt $((${#INSTANCES[@]} - 1)) ]; then
-    echo -n "$ENTRY, " >>"$CLUSTER_FILE"
-  else
-    echo -n "$ENTRY" >>"$CLUSTER_FILE"
-  fi
+  NODE_IPS_LIST+=("$INTERNAL_IP")
 done
-echo "]" >>"$CLUSTER_FILE"
+
+NODE_IPS=$(
+  IFS=,
+  echo "${NODE_IPS_LIST[*]}"
+)
+
+CLUSTER_FILE="configs/gcp_cluster.toml"
+
+echo "Generating cluster configuration..."
+if [ "$SINGLE_REGION" = true ]; then
+  # If single-region is enabled, inject latencies on application level
+  python3 generate_cluster_config.py --names "$NODE_NAMES" --ips "$NODE_IPS" --latencies "$DEPLOY_REGION"
+else
+  python3 generate_cluster_config.py --names "$NODE_NAMES" --ips "$NODE_IPS"
+fi
 
 for i in "${!INSTANCES[@]}"; do
   echo "Deploying to ${INSTANCES[$i]}..."

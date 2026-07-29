@@ -1,7 +1,7 @@
 use crate::{configs::ServerConfig, database::Database};
 use benchmark::common::{
-    Command, DaemonToServer, FromClient, IPC_SOCKET_PATH, IpcFromDaemon, IpcToServer,
-    ServerToDaemon, ToClient, frame_ipc_server_side,
+    Command, DaemonToServer, FromClient, IpcFromDaemon, IpcToServer, ServerToDaemon, ToClient,
+    frame_ipc_server_side,
 };
 use chrono::Utc;
 use futures::{SinkExt, StreamExt, stream::ReadyChunks};
@@ -49,14 +49,12 @@ impl OmniPaxosServer {
         let omnipaxos_msg_buffer = Vec::with_capacity(omnipaxos_config.server_config.buffer_size);
         let omnipaxos = omnipaxos_config.build().unwrap();
 
+        let ipc_path = benchmark::common::get_ipc_socket_path(config.server_id);
         let ipc_stream = loop {
-            match UnixStream::connect(IPC_SOCKET_PATH).await {
+            match UnixStream::connect(&ipc_path).await {
                 Ok(stream) => break stream,
                 Err(e) => {
-                    warn!(
-                        "Waiting for network daemon at {}... ({})",
-                        IPC_SOCKET_PATH, e
-                    );
+                    warn!("Waiting for network daemon at {}... ({})", ipc_path, e);
                     tokio::time::sleep(Duration::from_millis(500)).await;
                 }
             }
