@@ -162,11 +162,9 @@ impl OmniPaxosServer {
                     slog::info!(logger, "{}", fast_path_stats);
 
                     // Track execution time of appending
-                    let avg_time_ns = if self.append_count > 0 {
-                        self.append_total_time_ns / self.append_count
-                    } else {
-                        0
-                    };
+                    let avg_time_ns = self.append_total_time_ns
+                        .checked_div(self.append_count)
+                        .unwrap_or(0);
                     slog::info!(
                         logger,
                         "Append performance over last minute - Count: {}, Avg Time: {} ns",
