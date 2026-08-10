@@ -1,0 +1,4 @@
+Jul 30 12:05:36.122 INFO Paxos component pid: 4 created! Initial Mode: OmniPaxos
+Jul 30 12:05:36.124 INFO Newly elected leader: Ballot { n: 1, priority: 0, pid: 4 }
+Jul 30 12:05:36.431 INFO Pid: 4 promising Ballot { n: 1, priority: 0, pid: 5 }
+Jul 30 12:12:03.132 INFO Batch Offline Calibration successful! Size: 1250. Initialized Lambda: 0.7626042062961312. Empirical risk: 0.0488.

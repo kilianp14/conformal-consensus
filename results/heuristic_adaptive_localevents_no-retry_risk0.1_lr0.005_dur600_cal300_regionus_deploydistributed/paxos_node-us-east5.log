@@ -1,0 +1,3 @@
+Jul 30 13:53:06.574 INFO Paxos component pid: 4 created! Initial Mode: OmniPaxos
+Jul 30 13:53:06.575 INFO Newly elected leader: Ballot { n: 1, priority: 0, pid: 4 }
+Jul 30 13:53:06.987 INFO Pid: 4 promising Ballot { n: 1, priority: 0, pid: 5 }

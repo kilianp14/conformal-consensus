@@ -1,0 +1,2 @@
+Jul 28 08:31:52.708 INFO Paxos component pid: 3 created! Initial Mode: FastPaxos
+Jul 28 08:32:22.296 INFO Pid: 3 promising Ballot { n: 1, priority: 0, pid: 5 }

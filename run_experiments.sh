@@ -49,13 +49,13 @@ EXPERIMENTS=(
   "crc_adaptive localevents --retry 0.5 0.005 600 300"
   # Score function validity
   "heuristic_adaptive localevents --no-retry 0.1 0.005 600 300"
-  "heuristic_adaptive localevents --no-retry 0.2 0.005 600 300"
-  # # Overhead (Calibration)
-  # "crc_adaptive localevents --retry 0.1 0.005 60 100"
-  # "crc_adaptive localevents --retry 0.1 0.005 60 300"
-  # "crc_adaptive localevents --retry 0.1 0.005 60 500"
-  # "crc_adaptive localevents --retry 0.1 0.005 60 700"
-  # "crc_adaptive localevents --retry 0.1 0.005 60 900"
+  "heuristic_adaptive localevents --no-retry 0.5 0.005 600 300"
+  # Overhead (Calibration)
+  "crc_adaptive localevents --retry 0.1 0.005 60 100"
+  "crc_adaptive localevents --retry 0.1 0.005 60 300"
+  "crc_adaptive localevents --retry 0.1 0.005 60 500"
+  "crc_adaptive localevents --retry 0.1 0.005 60 700"
+  "crc_adaptive localevents --retry 0.1 0.005 60 900"
 )
 
 echo "Fetching instances for region: $DEPLOY_REGION"

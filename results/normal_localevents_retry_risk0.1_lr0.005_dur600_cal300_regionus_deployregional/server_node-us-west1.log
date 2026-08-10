@@ -1,0 +1,66 @@
+Jul 28 08:47:04.149 INFO === Fast Path Statistics ===
+Total Append Attempts:  267
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 28 08:47:04.149 INFO Append performance over last minute - Count: 267, Avg Time: 2078 ns
+Jul 28 08:48:04.149 INFO === Fast Path Statistics ===
+Total Append Attempts:  401
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 28 08:48:04.149 INFO Append performance over last minute - Count: 401, Avg Time: 2369 ns
+Jul 28 08:49:04.148 INFO === Fast Path Statistics ===
+Total Append Attempts:  162
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 28 08:49:04.148 INFO Append performance over last minute - Count: 162, Avg Time: 1966 ns
+Jul 28 08:50:04.149 INFO === Fast Path Statistics ===
+Total Append Attempts:  149
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 28 08:50:04.149 INFO Append performance over last minute - Count: 149, Avg Time: 2430 ns
+Jul 28 08:51:04.149 INFO === Fast Path Statistics ===
+Total Append Attempts:  124
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 28 08:51:04.149 INFO Append performance over last minute - Count: 124, Avg Time: 2087 ns
+Jul 28 08:52:04.148 INFO === Fast Path Statistics ===
+Total Append Attempts:  261
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 28 08:52:04.149 INFO Append performance over last minute - Count: 261, Avg Time: 1934 ns
+Jul 28 08:53:04.149 INFO === Fast Path Statistics ===
+Total Append Attempts:  147
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 28 08:53:04.149 INFO Append performance over last minute - Count: 147, Avg Time: 1965 ns
+Jul 28 08:54:04.149 INFO === Fast Path Statistics ===
+Total Append Attempts:  323
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 28 08:54:04.149 INFO Append performance over last minute - Count: 323, Avg Time: 2092 ns
+Jul 28 08:55:04.149 INFO === Fast Path Statistics ===
+Total Append Attempts:  139
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 28 08:55:04.149 INFO Append performance over last minute - Count: 139, Avg Time: 2413 ns
+Jul 28 08:56:04.149 INFO === Fast Path Statistics ===
+Total Append Attempts:  203
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 28 08:56:04.149 INFO Append performance over last minute - Count: 203, Avg Time: 2010 ns
+Jul 28 08:57:04.148 INFO === Fast Path Statistics ===
+Total Append Attempts:  136
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 28 08:57:04.148 INFO Append performance over last minute - Count: 136, Avg Time: 2193 ns

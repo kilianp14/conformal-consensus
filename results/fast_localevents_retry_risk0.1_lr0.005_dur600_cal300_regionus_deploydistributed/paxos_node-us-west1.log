@@ -1,0 +1,3 @@
+Jul 30 11:21:19.053 INFO Ballot Leader Election component pid: 1 created!
+tPaxos
+Jul 30 11:21:32.753 INFO Pid: 1 promising Ballot { n: 1, priority: 0, pid: 5 }

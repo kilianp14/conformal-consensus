@@ -1,0 +1,6 @@
+Jul 28 13:06:17.649 INFO Ballot Leader Election component pid: 5 created!
+iPaxos
+Jul 28 13:06:17.650 INFO Newly elected leader: Ballot { n: 1, priority: 0, pid: 5 }
+Jul 28 13:06:18.651 INFO Newly elected leader: Ballot { n: 2, priority: 0, pid: 5 }
+Jul 28 13:06:19.650 INFO Newly elected leader: Ballot { n: 3, priority: 0, pid: 5 }
+Jul 28 13:06:20.651 INFO Newly elected leader: Ballot { n: 4, priority: 0, pid: 5 }

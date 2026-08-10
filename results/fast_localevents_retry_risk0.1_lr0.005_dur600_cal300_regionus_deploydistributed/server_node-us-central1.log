@@ -1,0 +1,66 @@
+Jul 30 11:23:03.737 INFO === Fast Path Statistics ===
+Total Append Attempts:  66
+Fast Path Attempts:     66 (Utilization: 100.00%)
+  ├─ Successes:         19 (Total Rate: 28.79%, Path Success: 28.79%)
+  └─ Errors:            47 (Total Rate: 71.21%, Path Error: 71.21%)
+Jul 30 11:23:03.737 INFO Append performance over last minute - Count: 66, Avg Time: 13617 ns
+Jul 30 11:24:03.737 INFO === Fast Path Statistics ===
+Total Append Attempts:  426
+Fast Path Attempts:     426 (Utilization: 100.00%)
+  ├─ Successes:         106 (Total Rate: 24.88%, Path Success: 24.88%)
+  └─ Errors:            320 (Total Rate: 75.12%, Path Error: 75.12%)
+Jul 30 11:24:03.737 INFO Append performance over last minute - Count: 426, Avg Time: 9260 ns
+Jul 30 11:25:03.737 INFO === Fast Path Statistics ===
+Total Append Attempts:  212
+Fast Path Attempts:     212 (Utilization: 100.00%)
+  ├─ Successes:         59 (Total Rate: 27.83%, Path Success: 27.83%)
+  └─ Errors:            153 (Total Rate: 72.17%, Path Error: 72.17%)
+Jul 30 11:25:03.737 INFO Append performance over last minute - Count: 212, Avg Time: 9632 ns
+Jul 30 11:26:03.737 INFO === Fast Path Statistics ===
+Total Append Attempts:  380
+Fast Path Attempts:     380 (Utilization: 100.00%)
+  ├─ Successes:         163 (Total Rate: 42.89%, Path Success: 42.89%)
+  └─ Errors:            216 (Total Rate: 56.84%, Path Error: 56.84%)
+Jul 30 11:26:03.737 INFO Append performance over last minute - Count: 380, Avg Time: 10575 ns
+Jul 30 11:27:03.737 INFO === Fast Path Statistics ===
+Total Append Attempts:  268
+Fast Path Attempts:     268 (Utilization: 100.00%)
+  ├─ Successes:         48 (Total Rate: 17.91%, Path Success: 17.91%)
+  └─ Errors:            221 (Total Rate: 82.46%, Path Error: 82.46%)
+Jul 30 11:27:03.738 INFO Append performance over last minute - Count: 268, Avg Time: 9549 ns
+Jul 30 11:28:03.737 INFO === Fast Path Statistics ===
+Total Append Attempts:  206
+Fast Path Attempts:     206 (Utilization: 100.00%)
+  ├─ Successes:         71 (Total Rate: 34.47%, Path Success: 34.47%)
+  └─ Errors:            133 (Total Rate: 64.56%, Path Error: 64.56%)
+Jul 30 11:28:03.737 INFO Append performance over last minute - Count: 206, Avg Time: 10804 ns
+Jul 30 11:29:03.737 INFO === Fast Path Statistics ===
+Total Append Attempts:  171
+Fast Path Attempts:     171 (Utilization: 100.00%)
+  ├─ Successes:         38 (Total Rate: 22.22%, Path Success: 22.22%)
+  └─ Errors:            135 (Total Rate: 78.95%, Path Error: 78.95%)
+Jul 30 11:29:03.737 INFO Append performance over last minute - Count: 171, Avg Time: 9988 ns
+Jul 30 11:30:03.737 INFO === Fast Path Statistics ===
+Total Append Attempts:  144
+Fast Path Attempts:     144 (Utilization: 100.00%)
+  ├─ Successes:         36 (Total Rate: 25.00%, Path Success: 25.00%)
+  └─ Errors:            108 (Total Rate: 75.00%, Path Error: 75.00%)
+Jul 30 11:30:03.737 INFO Append performance over last minute - Count: 144, Avg Time: 9971 ns
+Jul 30 11:31:03.737 INFO === Fast Path Statistics ===
+Total Append Attempts:  275
+Fast Path Attempts:     275 (Utilization: 100.00%)
+  ├─ Successes:         101 (Total Rate: 36.73%, Path Success: 36.73%)
+  └─ Errors:            173 (Total Rate: 62.91%, Path Error: 62.91%)
+Jul 30 11:31:03.737 INFO Append performance over last minute - Count: 275, Avg Time: 8786 ns
+Jul 30 11:32:03.737 INFO === Fast Path Statistics ===
+Total Append Attempts:  173
+Fast Path Attempts:     173 (Utilization: 100.00%)
+  ├─ Successes:         110 (Total Rate: 63.58%, Path Success: 63.58%)
+  └─ Errors:            64 (Total Rate: 36.99%, Path Error: 36.99%)
+Jul 30 11:32:03.737 INFO Append performance over last minute - Count: 173, Avg Time: 9283 ns
+Jul 30 11:33:03.737 INFO === Fast Path Statistics ===
+Total Append Attempts:  103
+Fast Path Attempts:     103 (Utilization: 100.00%)
+  ├─ Successes:         27 (Total Rate: 26.21%, Path Success: 26.21%)
+  └─ Errors:            76 (Total Rate: 73.79%, Path Error: 73.79%)
+Jul 30 11:33:03.737 INFO Append performance over last minute - Count: 103, Avg Time: 11165 ns

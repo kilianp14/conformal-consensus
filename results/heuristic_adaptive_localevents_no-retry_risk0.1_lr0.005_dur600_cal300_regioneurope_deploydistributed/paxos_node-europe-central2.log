@@ -1,0 +1,2 @@
+Jul 30 17:04:39.875 INFO Paxos component pid: 4 created! Initial Mode: OmniPaxos
+Jul 30 17:04:40.168 INFO Pid: 4 promising Ballot { n: 4, priority: 0, pid: 5 }

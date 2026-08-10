@@ -1,0 +1,112 @@
+Jul 30 11:48:57.871 INFO === Fast Path Statistics ===
+Total Append Attempts:  948
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 30 11:48:57.872 INFO Append performance over last minute - Count: 216, Avg Time: 9151 ns
+Jul 30 11:48:57.872 INFO Current latencies: {4: Some(0.07537065000000001), 3: Some(0.034062499999999996), 1: Some(0.014229849999999999), 2: Some(0.00419345)}
+Jul 30 11:49:57.871 INFO === Fast Path Statistics ===
+Total Append Attempts:  1198
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 30 11:49:57.871 INFO Append performance over last minute - Count: 236, Avg Time: 10592 ns
+Jul 30 11:49:57.871 INFO Current latencies: {2: Some(0.00417815), 1: Some(0.0142714), 3: Some(0.0340868), 4: Some(0.0789455)}
+Jul 30 11:50:57.870 INFO === Fast Path Statistics ===
+Total Append Attempts:  908
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 30 11:50:57.870 INFO Append performance over last minute - Count: 142, Avg Time: 9668 ns
+Jul 30 11:50:57.870 INFO Current latencies: {4: Some(0.028503450000000003), 2: Some(0.0041881999999999996), 3: Some(0.034183399999999996), 1: Some(0.014315149999999999)}
+Jul 30 11:51:57.871 INFO === Fast Path Statistics ===
+Total Append Attempts:  1120
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 30 11:51:57.871 INFO Append performance over last minute - Count: 217, Avg Time: 9364 ns
+Jul 30 11:51:57.871 INFO Current latencies: {4: Some(0.02843795), 3: Some(0.03398275), 1: Some(0.0141954), 2: Some(0.00421565)}
+Jul 30 11:52:57.871 INFO === Fast Path Statistics ===
+Total Append Attempts:  922
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 30 11:52:57.871 INFO Append performance over last minute - Count: 105, Avg Time: 10834 ns
+Jul 30 11:52:57.871 INFO Current latencies: {1: Some(0.0143327), 2: Some(0.00431315), 3: Some(0.03700625), 4: Some(0.07464865000000001)}
+Jul 30 11:53:57.870 INFO === Fast Path Statistics ===
+Total Append Attempts:  819
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 30 11:53:57.870 INFO Append performance over last minute - Count: 147, Avg Time: 11795 ns
+Jul 30 11:53:57.870 INFO Current latencies: {4: Some(0.07468545), 3: Some(0.03761915), 1: Some(0.014341800000000002), 2: Some(0.00484885)}
+Jul 30 11:54:57.871 INFO === Fast Path Statistics ===
+Total Append Attempts:  1173
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 30 11:54:57.871 INFO Append performance over last minute - Count: 368, Avg Time: 9327 ns
+Jul 30 11:54:57.871 INFO Current latencies: {1: Some(0.014276850000000002), 4: Some(0.027670500000000004), 3: Some(0.0374948), 2: Some(0.0047623)}
+Jul 30 11:55:57.871 INFO === Fast Path Statistics ===
+Total Append Attempts:  488
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 30 11:55:57.871 INFO Append performance over last minute - Count: 71, Avg Time: 9635 ns
+Jul 30 11:55:57.871 INFO Current latencies: {3: Some(0.0751735), 4: Some(0.029007250000000002), 1: Some(0.0124254), 2: Some(0.0048984)}
+Jul 30 11:56:57.871 INFO === Fast Path Statistics ===
+Total Append Attempts:  906
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 30 11:56:57.871 INFO Append performance over last minute - Count: 133, Avg Time: 11275 ns
+Jul 30 11:56:57.871 INFO Current latencies: {4: Some(0.032919500000000004), 2: Some(0.0048325500000000006), 1: Some(0.0124144), 3: Some(0.10026120000000001)}
+Jul 30 11:57:57.870 INFO === Fast Path Statistics ===
+Total Append Attempts:  1140
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 30 11:57:57.871 INFO Append performance over last minute - Count: 89, Avg Time: 9927 ns
+Jul 30 11:57:57.871 INFO Current latencies: {2: Some(0.004820099999999999), 4: Some(0.03284), 3: Some(0.037504300000000004), 1: Some(0.01236535)}
+Jul 30 11:58:57.871 INFO === Fast Path Statistics ===
+Total Append Attempts:  597
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 30 11:58:57.871 INFO Append performance over last minute - Count: 220, Avg Time: 8489 ns
+Jul 30 11:58:57.871 INFO Current latencies: {1: Some(0.01237165), 2: Some(0.00441415), 3: Some(0.0341211), 4: Some(0.03287605)}
+Jul 30 11:59:57.871 INFO === Fast Path Statistics ===
+Total Append Attempts:  632
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 30 11:59:57.871 INFO Append performance over last minute - Count: 127, Avg Time: 8230 ns
+Jul 30 11:59:57.871 INFO Current latencies: {1: Some(0.012330399999999998), 3: Some(0.033971100000000004), 4: Some(0.0328641), 2: Some(0.00437855)}
+Jul 30 12:00:57.871 INFO === Fast Path Statistics ===
+Total Append Attempts:  809
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 30 12:00:57.871 INFO Append performance over last minute - Count: 174, Avg Time: 8963 ns
+Jul 30 12:00:57.871 INFO Current latencies: {3: Some(0.03406235), 1: Some(0.014383500000000002), 2: Some(0.00438085), 4: Some(0.027789650000000006)}
+Jul 30 12:01:57.871 INFO === Fast Path Statistics ===
+Total Append Attempts:  910
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 30 12:01:57.871 INFO Append performance over last minute - Count: 196, Avg Time: 8451 ns
+Jul 30 12:01:57.871 INFO Current latencies: {3: Some(0.03416295), 2: Some(0.0044204), 4: Some(0.02784395), 1: Some(0.0143601)}
+Jul 30 12:02:57.871 INFO === Fast Path Statistics ===
+Total Append Attempts:  898
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 30 12:02:57.871 INFO Append performance over last minute - Count: 277, Avg Time: 9576 ns
+Jul 30 12:02:57.871 INFO Current latencies: {2: Some(0.004413200000000001), 1: Some(0.0143454), 3: Some(0.03459645), 4: Some(0.032291)}
+Jul 30 12:03:57.871 INFO === Fast Path Statistics ===
+Total Append Attempts:  1056
+Fast Path Attempts:     0 (Utilization: 0.00%)
+  ├─ Successes:         0 (Total Rate: 0.00%, Path Success: N/A)
+  └─ Errors:            0 (Total Rate: 0.00%, Path Error: N/A)
+Jul 30 12:03:57.871 INFO Append performance over last minute - Count: 336, Avg Time: 9543 ns
+Jul 30 12:03:57.871 INFO Current latencies: {4: Some(0.027743549999999995), 1: Some(0.014355700000000002), 2: Some(0.00477315), 3: Some(0.03276395)}

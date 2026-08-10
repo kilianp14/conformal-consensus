@@ -1,0 +1,66 @@
+Jul 28 08:33:53.276 INFO === Fast Path Statistics ===
+Total Append Attempts:  228
+Fast Path Attempts:     228 (Utilization: 100.00%)
+  ├─ Successes:         178 (Total Rate: 78.07%, Path Success: 78.07%)
+  └─ Errors:            50 (Total Rate: 21.93%, Path Error: 21.93%)
+Jul 28 08:33:53.276 INFO Append performance over last minute - Count: 228, Avg Time: 7174 ns
+Jul 28 08:34:53.275 INFO === Fast Path Statistics ===
+Total Append Attempts:  339
+Fast Path Attempts:     339 (Utilization: 100.00%)
+  ├─ Successes:         127 (Total Rate: 37.46%, Path Success: 37.46%)
+  └─ Errors:            212 (Total Rate: 62.54%, Path Error: 62.54%)
+Jul 28 08:34:53.275 INFO Append performance over last minute - Count: 339, Avg Time: 7441 ns
+Jul 28 08:35:53.275 INFO === Fast Path Statistics ===
+Total Append Attempts:  98
+Fast Path Attempts:     98 (Utilization: 100.00%)
+  ├─ Successes:         58 (Total Rate: 59.18%, Path Success: 59.18%)
+  └─ Errors:            40 (Total Rate: 40.82%, Path Error: 40.82%)
+Jul 28 08:35:53.275 INFO Append performance over last minute - Count: 98, Avg Time: 7820 ns
+Jul 28 08:36:53.275 INFO === Fast Path Statistics ===
+Total Append Attempts:  204
+Fast Path Attempts:     204 (Utilization: 100.00%)
+  ├─ Successes:         117 (Total Rate: 57.35%, Path Success: 57.35%)
+  └─ Errors:            86 (Total Rate: 42.16%, Path Error: 42.16%)
+Jul 28 08:36:53.275 INFO Append performance over last minute - Count: 204, Avg Time: 10122 ns
+Jul 28 08:37:53.275 INFO === Fast Path Statistics ===
+Total Append Attempts:  348
+Fast Path Attempts:     348 (Utilization: 100.00%)
+  ├─ Successes:         66 (Total Rate: 18.97%, Path Success: 18.97%)
+  └─ Errors:            283 (Total Rate: 81.32%, Path Error: 81.32%)
+Jul 28 08:37:53.275 INFO Append performance over last minute - Count: 348, Avg Time: 7400 ns
+Jul 28 08:38:53.275 INFO === Fast Path Statistics ===
+Total Append Attempts:  255
+Fast Path Attempts:     255 (Utilization: 100.00%)
+  ├─ Successes:         55 (Total Rate: 21.57%, Path Success: 21.57%)
+  └─ Errors:            200 (Total Rate: 78.43%, Path Error: 78.43%)
+Jul 28 08:38:53.275 INFO Append performance over last minute - Count: 255, Avg Time: 8455 ns
+Jul 28 08:39:53.275 INFO === Fast Path Statistics ===
+Total Append Attempts:  220
+Fast Path Attempts:     220 (Utilization: 100.00%)
+  ├─ Successes:         43 (Total Rate: 19.55%, Path Success: 19.55%)
+  └─ Errors:            177 (Total Rate: 80.45%, Path Error: 80.45%)
+Jul 28 08:39:53.275 INFO Append performance over last minute - Count: 220, Avg Time: 7879 ns
+Jul 28 08:40:53.275 INFO === Fast Path Statistics ===
+Total Append Attempts:  147
+Fast Path Attempts:     147 (Utilization: 100.00%)
+  ├─ Successes:         20 (Total Rate: 13.61%, Path Success: 13.61%)
+  └─ Errors:            126 (Total Rate: 85.71%, Path Error: 85.71%)
+Jul 28 08:40:53.275 INFO Append performance over last minute - Count: 147, Avg Time: 9246 ns
+Jul 28 08:41:53.275 INFO === Fast Path Statistics ===
+Total Append Attempts:  270
+Fast Path Attempts:     270 (Utilization: 100.00%)
+  ├─ Successes:         127 (Total Rate: 47.04%, Path Success: 47.04%)
+  └─ Errors:            144 (Total Rate: 53.33%, Path Error: 53.33%)
+Jul 28 08:41:53.275 INFO Append performance over last minute - Count: 270, Avg Time: 8456 ns
+Jul 28 08:42:53.275 INFO === Fast Path Statistics ===
+Total Append Attempts:  262
+Fast Path Attempts:     262 (Utilization: 100.00%)
+  ├─ Successes:         107 (Total Rate: 40.84%, Path Success: 40.84%)
+  └─ Errors:            155 (Total Rate: 59.16%, Path Error: 59.16%)
+Jul 28 08:42:53.275 INFO Append performance over last minute - Count: 262, Avg Time: 7786 ns
+Jul 28 08:43:53.275 INFO === Fast Path Statistics ===
+Total Append Attempts:  154
+Fast Path Attempts:     154 (Utilization: 100.00%)
+  ├─ Successes:         33 (Total Rate: 21.43%, Path Success: 21.43%)
+  └─ Errors:            121 (Total Rate: 78.57%, Path Error: 78.57%)
+Jul 28 08:43:53.275 INFO Append performance over last minute - Count: 154, Avg Time: 9245 ns

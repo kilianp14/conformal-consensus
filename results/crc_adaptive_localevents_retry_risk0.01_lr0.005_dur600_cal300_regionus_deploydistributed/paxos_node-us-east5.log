@@ -1,0 +1,5 @@
+Jul 30 12:23:30.924 INFO Ballot Leader Election component pid: 4 created!
+iPaxos
+Jul 30 12:23:30.926 INFO Newly elected leader: Ballot { n: 1, priority: 0, pid: 4 }
+Jul 30 12:23:35.779 INFO Pid: 4 promising Ballot { n: 1, priority: 0, pid: 5 }
+Jul 30 12:29:56.934 INFO Batch Offline Calibration successful! Size: 1193. Initialized Lambda: 0.9677547915872067. Empirical risk: 0.006705783738474434.

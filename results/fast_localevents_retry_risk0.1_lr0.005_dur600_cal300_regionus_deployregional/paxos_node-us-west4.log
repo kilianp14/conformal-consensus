@@ -1,0 +1,2 @@
+Jul 28 08:32:22.272 INFO Paxos component pid: 5 created! Initial Mode: FastPaxos
+Jul 28 08:32:22.274 INFO Newly elected leader: Ballot { n: 1, priority: 0, pid: 5 }

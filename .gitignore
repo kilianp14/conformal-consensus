@@ -1,14 +1,4 @@
-/docs/book/*
 /target
 /logs
 /configs
 Cargo.lock
-
-# IntelliJ
-*.iml
-.idea/*
-*.log
-docs/.DS_Store
-.DS_Store
-*/.idea/*
-
